@@ -4,10 +4,12 @@ from src.models.enums import TeamRole
 
 class TeamCreate(BaseModel):
     team_name: constr(min_length=1, max_length=255)
+    team_motto: constr(min_length=1, max_length=255)
 
 class TeamResponse(BaseModel):
     id: UUID
     team_name: str
+    team_motto: str
     team_leader_id: UUID
 
     class Config:

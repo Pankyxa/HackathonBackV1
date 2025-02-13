@@ -1,6 +1,8 @@
+import time
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, exists
 import uuid
 from typing import List
 
@@ -35,6 +37,7 @@ async def create_team(
     team = Team(
         id=uuid.uuid4(),
         team_name=team_data.team_name,
+        team_motto=team_data.team_motto,
         team_leader_id=current_user.id
     )
     session.add(team)
@@ -118,7 +121,13 @@ async def get_teams(
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session)
 ):
-    query = select(Team).where(Team.team_leader_id == current_user.id)
+    query = select(Team).where(
+        exists(
+            select(1).where(
+                TeamMember.team_id == Team.id,
+                TeamMember.user_id == current_user.id
+            )
+        ))
     result = await session.execute(query)
     teams = result.scalars().all()
     return teams

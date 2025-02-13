@@ -35,6 +35,7 @@ class Team(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     team_name = Column(String(255), nullable=False)
+    team_motto = Column(String(255), nullable=False)
     team_leader_id = Column(UUID(as_uuid=True), ForeignKey('users.id'), nullable=False)
 
     # Relationships
