@@ -39,3 +39,6 @@ ENV/
 
 # Docker
 .dockerignore
+
+# User files
+uploads/*

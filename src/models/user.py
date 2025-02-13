@@ -3,10 +3,8 @@ from sqlalchemy import Column, String, DateTime, Boolean, ForeignKey, Enum as SQ
 from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.postgresql import UUID
 import uuid
-from sqlalchemy.ext.declarative import declarative_base
+from src.db import Base
 from .enums import TeamRole
-
-Base = declarative_base()
 
 
 class User(Base):
@@ -27,6 +25,7 @@ class User(Base):
     user2roles = relationship("User2Roles", back_populates="user")
     teams_as_leader = relationship("Team", back_populates="team_leader")
     team_members = relationship("TeamMember", back_populates="user")
+    files = relationship("File", back_populates="user", cascade="all, delete-orphan")
 
 
 class Team(Base):

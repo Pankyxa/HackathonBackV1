@@ -1,28 +1,88 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Security
+from fastapi import APIRouter, Depends, HTTPException, status, Security, UploadFile, File, Form
+from fastapi.encoders import jsonable_encoder
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 import uuid
-
+import os
+import aiofiles
 from src.auth.utils import verify_password, get_password_hash
 from src.db import get_session
 from src.models.user import User
-from src.schemas.user import UserCreate, UserLogin, Token, UserResponse
+from src.models.file import File as FileModel
+from src.models.enums import FileFormat, FileType
+from src.schemas.user import UserCreate, UserLogin, Token, UserResponse, UserResponseRegister
 from src.auth.jwt import create_access_token, get_current_user, oauth2_scheme
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from sqlalchemy.orm import selectinload
 
 security = HTTPBearer()
 router = APIRouter(prefix="/auth", tags=["auth"])
 
-@router.post("/register", response_model=UserResponse)
-async def register(user_data: UserCreate, session: AsyncSession = Depends(get_session)):
+# Функция для сохранения файла
+async def save_file(upload_file: UploadFile, user_id: uuid.UUID, file_type: FileType) -> FileModel:
+    # Создаем директорию для файлов пользователя, если её нет
+    upload_dir = f"uploads/{user_id}"
+    os.makedirs(upload_dir, exist_ok=True)
+
+    # Получаем расширение файла
+    file_extension = os.path.splitext(upload_file.filename)[1]
+    # Создаем уникальное имя файла
+    file_name = f"{uuid.uuid4()}{file_extension}"
+    file_path = os.path.join(upload_dir, file_name)
+
+    # Сохраняем файл
+    async with aiofiles.open(file_path, 'wb') as out_file:
+        content = await upload_file.read()
+        await out_file.write(content)
+
+    # Определяем формат файла по расширению
+    file_format = FileFormat.PDF if file_extension.lower() == '.pdf' else FileFormat.IMAGE
+
+    # Создаем запись в базе данных
+    return FileModel(
+        id=uuid.uuid4(),
+        filename=upload_file.filename,
+        file_path=file_path,
+        file_format=file_format,
+        file_type=file_type,
+        user_id=user_id
+    )
+
+@router.post("/register", response_model=UserResponseRegister)
+async def register(
+    email: str = Form(...),
+    password: str = Form(...),
+    number: str = Form(...),
+    vuz: str = Form(...),
+    vuz_direction: str = Form(...),
+    code_speciality: str = Form(...),
+    course: str = Form(...),
+    full_name: str = Form(None),
+    consent_file: UploadFile = File(...),
+    education_certificate_file: UploadFile = File(...),
+    session: AsyncSession = Depends(get_session)
+):
+    # Create UserCreate object from form data
+    user_data = UserCreate(
+        email=email,
+        password=password,
+        number=number,
+        vuz=vuz,
+        vuz_direction=vuz_direction,
+        code_speciality=code_speciality,
+        course=course,
+        full_name=full_name
+    )
+
+    # Check if email exists
     query = select(User).where(User.email == user_data.email)
     result = await session.execute(query)
     if result.scalar_one_or_none():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Email already registered"
+            detail="Email уже зарегистрирован"
         )
-
+    # Create user
     user = User(
         id=uuid.uuid4(),
         email=user_data.email,
@@ -34,11 +94,27 @@ async def register(user_data: UserCreate, session: AsyncSession = Depends(get_se
         code_speciality=user_data.code_speciality,
         course=user_data.course
     )
+
     session.add(user)
+
+    # Сохраняем файлы
+    consent_file_model = await save_file(consent_file, user.id, FileType.CONSENT)
+    education_file_model = await save_file(education_certificate_file, user.id, FileType.EDUCATION_CERTIFICATE)
+
+    # Добавляем файлы в сессию
+    session.add(consent_file_model)
+    session.add(education_file_model)
+
+    # Сохраняем все изменения
     await session.commit()
     await session.refresh(user)
 
-    return user
+    # Загружаем пользователя с файлами для ответа
+    query = select(User).options(selectinload(User.files)).where(User.id == user.id)
+    result = await session.execute(query)
+    user_with_files = result.scalar_one()
+
+    return user_with_files
 
 @router.post("/login", response_model=Token)
 async def login(user_data: UserLogin, session: AsyncSession = Depends(get_session)):
@@ -58,13 +134,13 @@ async def login(user_data: UserLogin, session: AsyncSession = Depends(get_sessio
     )
     return {"access_token": access_token, "token_type": "bearer"}
 
-@router.get(
-    "/me",
-    response_model=UserResponse,
-    dependencies=[Depends(oauth2_scheme)],
-    responses={
-        401: {"description": "Not authenticated"},
-    }
-)
-async def read_users_me(current_user: User = Depends(get_current_user)):
-    return current_user
+@router.get("/me", response_model=UserResponse)
+async def read_users_me(
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session)
+):
+    # Загружаем пользователя вместе с файлами
+    query = select(User).options(selectinload(User.files)).where(User.id == current_user.id)
+    result = await session.execute(query)
+    user = result.scalar_one_or_none()
+    return user

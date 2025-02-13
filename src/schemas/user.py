@@ -1,7 +1,8 @@
 import datetime
-from typing import Optional
+from typing import Optional, List
 from uuid import UUID
 from pydantic import BaseModel, EmailStr
+from .file import FileResponse
 
 class UserBase(BaseModel):
     email: EmailStr
@@ -32,6 +33,8 @@ class UserResponse(BaseModel):
     code_speciality: str
     course: str
     registered_at: datetime.datetime
-
     class Config:
         from_attributes = True
+
+class UserResponseRegister(UserResponse):
+    files: List[FileResponse] = []
