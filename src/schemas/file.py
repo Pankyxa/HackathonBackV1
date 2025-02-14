@@ -1,15 +1,18 @@
 from datetime import datetime
 from uuid import UUID
 from pydantic import BaseModel
-from src.models.enums import FileFormat, FileType
+from src.models import FileFormat, FileType
+
 
 class FileBase(BaseModel):
     filename: str
     file_format: FileFormat
     file_type: FileType
 
+
 class FileCreate(FileBase):
     pass
+
 
 class FileResponse(FileBase):
     id: UUID

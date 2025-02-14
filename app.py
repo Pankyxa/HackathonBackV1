@@ -1,8 +1,8 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
-from src.auth.router import router as auth_router
-from src.routers.teams import router as teams_router
+
+from src.routers import auth_router, teams_router
 
 app = FastAPI(
     title="Хакатон API",

@@ -1,5 +1,3 @@
-import time
-
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, exists
@@ -7,8 +5,7 @@ import uuid
 from typing import List
 
 from src.db import get_session
-from src.models.user import Team, TeamMember, User
-from src.models.enums import TeamRole
+from src.models import User, Team, TeamMember, TeamRole
 from src.auth.jwt import get_current_user
 from src.schemas.team import TeamCreate, TeamResponse, TeamMemberCreate, TeamMemberResponse
 
@@ -57,12 +54,13 @@ async def create_team(
 
     return team
 
+
 @router.post("/{team_id}/members", response_model=TeamMemberResponse)
 async def add_team_member(
-    team_id: uuid.UUID,
-    member_data: TeamMemberCreate,
-    current_user: User = Depends(get_current_user),
-    session: AsyncSession = Depends(get_session)
+        team_id: uuid.UUID,
+        member_data: TeamMemberCreate,
+        current_user: User = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session)
 ):
     # Проверяем существование команды
     team_query = select(Team).where(Team.id == team_id)
@@ -116,10 +114,11 @@ async def add_team_member(
 
     return team_member
 
+
 @router.get("", response_model=List[TeamResponse])
 async def get_teams(
-    current_user: User = Depends(get_current_user),
-    session: AsyncSession = Depends(get_session)
+        current_user: User = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session)
 ):
     query = select(Team).where(
         exists(

@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from src.db import get_session
-from src.models.user import User
+from src.models import User
 from src.settings import settings
 
 oauth2_scheme = OAuth2PasswordBearer(
@@ -16,11 +16,11 @@ oauth2_scheme = OAuth2PasswordBearer(
     description="JWT Authorization header using the Bearer scheme"
 )
 
-async def get_current_user(
-    token: str = Depends(oauth2_scheme),
-    session: AsyncSession = Depends(get_session)
-) -> User:
 
+async def get_current_user(
+        token: str = Depends(oauth2_scheme),
+        session: AsyncSession = Depends(get_session)
+) -> User:
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
@@ -48,9 +48,10 @@ async def get_current_user(
 
     return user
 
+
 def create_access_token(
-    data: dict,
-    expires_delta: Optional[timedelta] = None
+        data: dict,
+        expires_delta: Optional[timedelta] = None
 ) -> str:
     to_encode = data.copy()
 

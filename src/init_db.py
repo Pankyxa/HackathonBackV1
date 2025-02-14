@@ -1,6 +1,7 @@
 from sqlalchemy.ext.asyncio import AsyncEngine
 from src.db import Base
-from src.models import User, File
+from src.models import User, File, Team, Role, TeamMember
+
 
 async def init_models(engine: AsyncEngine):
     async with engine.begin() as conn:

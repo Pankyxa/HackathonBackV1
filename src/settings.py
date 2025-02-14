@@ -1,9 +1,8 @@
 from pydantic_settings import BaseSettings
-import os
 from pathlib import Path
 
-# Получаем абсолютный путь к корневой директории проекта
 BASE_DIR = Path(__file__).resolve().parent.parent
+
 
 class Settings(BaseSettings):
     jwt_secret: str

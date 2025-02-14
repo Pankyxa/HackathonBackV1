@@ -1,10 +1,23 @@
 from datetime import datetime
+from enum import Enum
 from sqlalchemy import Column, String, ForeignKey, DateTime, Enum as SQLAlchemyEnum
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 import uuid
+
 from src.db import Base
-from src.models.enums import FileFormat, FileType
+
+
+class FileFormat(Enum):
+    PDF = "pdf"
+    JPEG = "jpeg"
+    PNG = "png"
+
+
+class FileType(Enum):
+    CONSENT = "consent"
+    EDUCATION_CERTIFICATE = "education_certificate"
+    PROFILE_PHOTO = "profile_photo"
 
 
 class File(Base):

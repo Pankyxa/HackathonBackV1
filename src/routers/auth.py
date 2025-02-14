@@ -1,22 +1,21 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Security, UploadFile, File, Form
-from fastapi.encoders import jsonable_encoder
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
+from fastapi.security import HTTPBearer
+from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 import uuid
 import os
 import aiofiles
+
 from src.auth.utils import verify_password, get_password_hash
 from src.db import get_session
-from src.models.user import User
-from src.models.file import File as FileModel
-from src.models.enums import FileFormat, FileType
+from src.models import User, FileFormat, FileType, File as FileModel
 from src.schemas.user import UserCreate, UserLogin, Token, UserResponse, UserResponseRegister
-from src.auth.jwt import create_access_token, get_current_user, oauth2_scheme
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from sqlalchemy.orm import selectinload
+from src.auth.jwt import create_access_token, get_current_user
 
 security = HTTPBearer()
 router = APIRouter(prefix="/auth", tags=["auth"])
+
 
 # Функция для сохранения файла
 async def save_file(upload_file: UploadFile, user_id: uuid.UUID, file_type: FileType) -> FileModel:
@@ -48,19 +47,20 @@ async def save_file(upload_file: UploadFile, user_id: uuid.UUID, file_type: File
         user_id=user_id
     )
 
+
 @router.post("/register", response_model=UserResponseRegister)
 async def register(
-    email: str = Form(...),
-    password: str = Form(...),
-    number: str = Form(...),
-    vuz: str = Form(...),
-    vuz_direction: str = Form(...),
-    code_speciality: str = Form(...),
-    course: str = Form(...),
-    full_name: str = Form(None),
-    consent_file: UploadFile = File(...),
-    education_certificate_file: UploadFile = File(...),
-    session: AsyncSession = Depends(get_session)
+        email: str = Form(...),
+        password: str = Form(...),
+        number: str = Form(...),
+        vuz: str = Form(...),
+        vuz_direction: str = Form(...),
+        code_speciality: str = Form(...),
+        course: str = Form(...),
+        full_name: str = Form(None),
+        consent_file: UploadFile = File(...),
+        education_certificate_file: UploadFile = File(...),
+        session: AsyncSession = Depends(get_session)
 ):
     # Create UserCreate object from form data
     user_data = UserCreate(
@@ -116,6 +116,7 @@ async def register(
 
     return user_with_files
 
+
 @router.post("/login", response_model=Token)
 async def login(user_data: UserLogin, session: AsyncSession = Depends(get_session)):
     query = select(User).where(User.email == user_data.email)
@@ -134,10 +135,11 @@ async def login(user_data: UserLogin, session: AsyncSession = Depends(get_sessio
     )
     return {"access_token": access_token, "token_type": "bearer"}
 
+
 @router.get("/me", response_model=UserResponse)
 async def read_users_me(
-    current_user: User = Depends(get_current_user),
-    session: AsyncSession = Depends(get_session)
+        current_user: User = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session)
 ):
     # Загружаем пользователя вместе с файлами
     query = select(User).options(selectinload(User.files)).where(User.id == current_user.id)
