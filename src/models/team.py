@@ -1,16 +1,11 @@
-from enum import Enum
 from sqlalchemy import Column, String, ForeignKey, Enum as SQLAlchemyEnum
 from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.postgresql import UUID
 import uuid
 
 from src.db import Base
-
-
-class TeamRole(str, Enum):
-    TEAMLEAD = 'teamlead'
-    DEVELOPER = 'developer'
-    MENTOR = 'mentor'
+from . import File
+from .enums import TeamRole
 
 
 class Team(Base):
@@ -21,12 +16,13 @@ class Team(Base):
     team_name = Column(String(255), nullable=False)
     team_motto = Column(String(255), nullable=False)
     team_leader_id = Column(UUID(as_uuid=True), ForeignKey('users.id'), nullable=False)
-    logo_file_id = Column(UUID(as_uuid=True), ForeignKey('files.id'), nullable=True)  # Добавляем поле для логотипа
+    logo_file_id = Column(UUID(as_uuid=True), ForeignKey('files.id'), nullable=True)
 
     # Relationships
     team_leader = relationship("User", back_populates="teams_as_leader")
     members = relationship("TeamMember", back_populates="team")
-    logo = relationship("File")  # Добавляем связь с файлом логотипа
+    logo = relationship("File", foreign_keys=[logo_file_id])
+    files = relationship("File", back_populates="team", foreign_keys=[File.team_id])
 
 
 class TeamMember(Base):

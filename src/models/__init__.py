@@ -1,16 +1,17 @@
-from .user import User, User2Roles
-from .team import Team, TeamMember, TeamRole
+from .enums import TeamRole, FileFormat, FileType, FileOwnerType
+from .user import User
+from .file import File
+from .team import Team, TeamMember
 from .role import Role
-from .file import File, FileFormat, FileType
 
 __all__ = [
     'User',
-    'User2Roles',
     'Team',
     'TeamMember',
     'TeamRole',
-    'Role',
     'File',
     'FileFormat',
-    'FileType'
+    'FileType',
+    'FileOwnerType',
+    'Role'
 ]

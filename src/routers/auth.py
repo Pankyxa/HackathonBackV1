@@ -9,7 +9,7 @@ import aiofiles
 
 from src.auth.utils import verify_password, get_password_hash
 from src.db import get_session
-from src.models import User, FileFormat, FileType, File as FileModel
+from src.models import User, FileFormat, FileType, FileOwnerType, File as FileModel
 from src.schemas.user import UserCreate, UserLogin, Token, UserResponse, UserResponseRegister
 from src.auth.jwt import create_access_token, get_current_user
 
@@ -17,35 +17,39 @@ security = HTTPBearer()
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
-# Функция для сохранения файла
-async def save_file(upload_file: UploadFile, user_id: uuid.UUID, file_type: FileType) -> FileModel:
-    # Создаем директорию для файлов пользователя, если её нет
-    upload_dir = f"uploads/{user_id}"
+async def save_file(
+    upload_file: UploadFile,
+    owner_id: uuid.UUID,
+    file_type: FileType,
+    owner_type: FileOwnerType
+) -> FileModel:
+    """Сохранение файла с указанием владельца"""
+    base_dir = "uploads/users" if owner_type == FileOwnerType.USER else "uploads/teams"
+    upload_dir = f"{base_dir}/{owner_id}"
     os.makedirs(upload_dir, exist_ok=True)
 
-    # Получаем расширение файла
     file_extension = os.path.splitext(upload_file.filename)[1]
-    # Создаем уникальное имя файла
     file_name = f"{uuid.uuid4()}{file_extension}"
     file_path = os.path.join(upload_dir, file_name)
 
-    # Сохраняем файл
     async with aiofiles.open(file_path, 'wb') as out_file:
         content = await upload_file.read()
         await out_file.write(content)
 
-    # Определяем формат файла по расширению
     file_format = FileFormat.PDF if file_extension.lower() == '.pdf' else FileFormat.IMAGE
 
-    # Создаем запись в базе данных
-    return FileModel(
+    file_model = FileModel(
         id=uuid.uuid4(),
         filename=upload_file.filename,
         file_path=file_path,
         file_format=file_format,
         file_type=file_type,
-        user_id=user_id
+        owner_type=owner_type,
+        user_id=owner_id if owner_type == FileOwnerType.USER else None,
+        team_id=owner_id if owner_type == FileOwnerType.TEAM else None
     )
+
+    return file_model
 
 
 @router.post("/register", response_model=UserResponseRegister)
@@ -97,19 +101,15 @@ async def register(
 
     session.add(user)
 
-    # Сохраняем файлы
-    consent_file_model = await save_file(consent_file, user.id, FileType.CONSENT)
-    education_file_model = await save_file(education_certificate_file, user.id, FileType.EDUCATION_CERTIFICATE)
+    consent_file_model = await save_file(consent_file, user.id, FileType.CONSENT, FileOwnerType.USER)
+    education_file_model = await save_file(education_certificate_file, user.id, FileType.EDUCATION_CERTIFICATE, FileOwnerType.USER)
 
-    # Добавляем файлы в сессию
     session.add(consent_file_model)
     session.add(education_file_model)
 
-    # Сохраняем все изменения
     await session.commit()
     await session.refresh(user)
 
-    # Загружаем пользователя с файлами для ответа
     query = select(User).options(selectinload(User.files)).where(User.id == user.id)
     result = await session.execute(query)
     user_with_files = result.scalar_one()
@@ -141,7 +141,6 @@ async def read_users_me(
         current_user: User = Depends(get_current_user),
         session: AsyncSession = Depends(get_session)
 ):
-    # Загружаем пользователя вместе с файлами
     query = select(User).options(selectinload(User.files)).where(User.id == current_user.id)
     result = await session.execute(query)
     user = result.scalar_one_or_none()

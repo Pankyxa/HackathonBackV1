@@ -1,23 +1,11 @@
 from datetime import datetime
-from enum import Enum
 from sqlalchemy import Column, String, ForeignKey, DateTime, Enum as SQLAlchemyEnum
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 import uuid
 
 from src.db import Base
-
-
-class FileFormat(Enum):
-    PDF = "pdf"
-    IMAGE = "image"
-
-
-class FileType(Enum):
-    CONSENT = "consent"
-    EDUCATION_CERTIFICATE = "education_certificate"
-    PROFILE_PHOTO = "profile_photo"
-    TEAM_LOGO = "team_logo"
+from .enums import FileFormat, FileType, FileOwnerType
 
 
 class File(Base):
@@ -30,7 +18,11 @@ class File(Base):
     file_format = Column(SQLAlchemyEnum(FileFormat), nullable=False)
     file_type = Column(SQLAlchemyEnum(FileType), nullable=False)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
-    user_id = Column(UUID(as_uuid=True), ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
+
+    owner_type = Column(SQLAlchemyEnum(FileOwnerType), nullable=False)
+    user_id = Column(UUID(as_uuid=True), ForeignKey('users.id', ondelete='CASCADE'), nullable=True)
+    team_id = Column(UUID(as_uuid=True), ForeignKey('teams.id', ondelete='CASCADE'), nullable=True)
 
     # Relationships
     user = relationship("User", back_populates="files")
+    team = relationship("Team", foreign_keys=[team_id], back_populates="files")
