@@ -1,26 +1,29 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, File, UploadFile, Form
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, exists
 import uuid
 from typing import List
 
 from src.db import get_session
-from src.models import User, Team, TeamMember, TeamRole
+from src.models import User, Team, TeamMember, TeamRole, FileType, FileFormat
 from src.auth.jwt import get_current_user
-from src.schemas.team import TeamCreate, TeamResponse, TeamMemberCreate, TeamMemberResponse
+from src.schemas.team import TeamResponse, TeamMemberCreate, TeamMemberResponse
+from src.routers.auth import save_file  # Импортируем функцию сохранения файла
 
 router = APIRouter(prefix="/teams", tags=["teams"])
 
 
 @router.post("/create", response_model=TeamResponse)
 async def create_team(
-        team_data: TeamCreate,
+        team_name: str = Form(...),
+        team_motto: str = Form(...),
+        logo: UploadFile = File(...),
         current_user: User = Depends(get_current_user),
         session: AsyncSession = Depends(get_session)
 ):
     # Проверяем, не является ли пользователь уже тимлидом другой команды
     query = select(TeamMember).where(
-        TeamMember.user_id == str(current_user.id),  # Преобразуем UUID в строку
+        TeamMember.user_id == str(current_user.id),
         TeamMember.role == TeamRole.TEAMLEAD
     )
     existing_teamlead = await session.execute(query)
@@ -30,12 +33,25 @@ async def create_team(
             detail="Пользователь уже является тим лидером другой команды"
         )
 
+    # Проверяем формат файла логотипа
+    if not logo.content_type.startswith('image/'):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Логотип должен быть изображением"
+        )
+
+    # Сохраняем файл логотипа
+    logo_file = await save_file(logo, current_user.id, FileType.TEAM_LOGO)
+    session.add(logo_file)
+    await session.flush()
+
     # Создаем команду
     team = Team(
         id=uuid.uuid4(),
-        team_name=team_data.team_name,
-        team_motto=team_data.team_motto,
-        team_leader_id=current_user.id
+        team_name=team_name,
+        team_motto=team_motto,
+        team_leader_id=current_user.id,
+        logo_file_id=logo_file.id  # Связываем команду с логотипом
     )
     session.add(team)
     await session.flush()
@@ -51,7 +67,6 @@ async def create_team(
 
     await session.commit()
     await session.refresh(team)
-
     return team
 
 

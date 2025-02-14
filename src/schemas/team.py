@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from pydantic import BaseModel, constr
 from uuid import UUID
 from src.models import TeamRole
@@ -13,6 +15,7 @@ class TeamResponse(BaseModel):
     team_name: str
     team_motto: str
     team_leader_id: UUID
+    logo_file_id: UUID | None
 
     class Config:
         from_attributes = True

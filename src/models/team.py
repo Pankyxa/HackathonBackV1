@@ -21,10 +21,12 @@ class Team(Base):
     team_name = Column(String(255), nullable=False)
     team_motto = Column(String(255), nullable=False)
     team_leader_id = Column(UUID(as_uuid=True), ForeignKey('users.id'), nullable=False)
+    logo_file_id = Column(UUID(as_uuid=True), ForeignKey('files.id'), nullable=True)  # Добавляем поле для логотипа
 
     # Relationships
     team_leader = relationship("User", back_populates="teams_as_leader")
     members = relationship("TeamMember", back_populates="team")
+    logo = relationship("File")  # Добавляем связь с файлом логотипа
 
 
 class TeamMember(Base):

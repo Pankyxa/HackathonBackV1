@@ -10,14 +10,14 @@ from src.db import Base
 
 class FileFormat(Enum):
     PDF = "pdf"
-    JPEG = "jpeg"
-    PNG = "png"
+    IMAGE = "image"
 
 
 class FileType(Enum):
     CONSENT = "consent"
     EDUCATION_CERTIFICATE = "education_certificate"
     PROFILE_PHOTO = "profile_photo"
+    TEAM_LOGO = "team_logo"
 
 
 class File(Base):
