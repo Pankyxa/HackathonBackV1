@@ -1,11 +1,12 @@
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, or_, and_
+from sqlalchemy import select, or_, and_, not_, exists
 from typing import List
 
 from src.auth.jwt import get_current_user
 from src.db import get_session
-from src.models import User
+from src.models import User, TeamMember
+from src.models.enums import TeamMemberStatus
 from src.schemas.user import UserResponse
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -20,17 +21,27 @@ async def search_users(
         session: AsyncSession = Depends(get_session)
 ):
     """
-    Search users by full name with pagination.
-    Returns users where full_name contains the search query (case-insensitive).
+    Поиск пользователей по ФИО с пагинацией.
     """
     search_query = f"%{query}%"
 
     stmt = (
         select(User)
-        .where(and_(
-            User.full_name.ilike(search_query),
-            User.id != current_user.id
-        ))
+        .where(
+            and_(
+                User.full_name.ilike(search_query),
+                User.id != current_user.id,
+                not_(
+                    exists(
+                        select(1)
+                        .where(
+                            TeamMember.user_id == User.id,
+                            TeamMember.status == TeamMemberStatus.ACCEPTED
+                        )
+                    )
+                )
+            )
+        )
         .limit(limit)
         .offset(offset)
         .order_by(User.full_name)

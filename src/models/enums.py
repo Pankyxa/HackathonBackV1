@@ -2,9 +2,15 @@ from enum import Enum
 
 
 class TeamRole(str, Enum):
-    TEAMLEAD = 'teamlead'
-    DEVELOPER = 'developer'
-    MENTOR = 'mentor'
+    TEAMLEAD = "teamlead"
+    MEMBER = "member"
+    MENTOR = "mentor"
+
+
+class TeamMemberStatus(str, Enum):
+    PENDING = "pending"
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"
 
 
 class FileFormat(Enum):
@@ -15,7 +21,6 @@ class FileFormat(Enum):
 class FileType(Enum):
     CONSENT = "consent"
     EDUCATION_CERTIFICATE = "education_certificate"
-    PROFILE_PHOTO = "profile_photo"
     TEAM_LOGO = "team_logo"
 
 
