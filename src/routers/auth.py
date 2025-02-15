@@ -9,7 +9,7 @@ import aiofiles
 
 from src.auth.utils import verify_password, get_password_hash
 from src.db import get_session
-from src.models import User, FileFormat, FileType, FileOwnerType, File as FileModel
+from src.models import User, FileFormat, FileType, FileOwnerType, File as FileModel, ParticipantInfo
 from src.schemas.user import UserCreate, UserLogin, Token, UserResponse, UserResponseRegister
 from src.auth.jwt import create_access_token, get_current_user
 
@@ -86,12 +86,19 @@ async def register(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Email уже зарегистрирован"
         )
+
     # Create user
     user = User(
         id=uuid.uuid4(),
         email=user_data.email,
         password=get_password_hash(user_data.password),
         full_name=user_data.full_name,
+    )
+
+    # Create participant info
+    participant_info = ParticipantInfo(
+        id=uuid.uuid4(),
+        user_id=user.id,
         number=user_data.number,
         vuz=user_data.vuz,
         vuz_direction=user_data.vuz_direction,
@@ -100,6 +107,7 @@ async def register(
     )
 
     session.add(user)
+    session.add(participant_info)
 
     consent_file_model = await save_file(consent_file, user.id, FileType.CONSENT, FileOwnerType.USER)
     education_file_model = await save_file(education_certificate_file, user.id, FileType.EDUCATION_CERTIFICATE, FileOwnerType.USER)
@@ -110,11 +118,18 @@ async def register(
     await session.commit()
     await session.refresh(user)
 
-    query = select(User).options(selectinload(User.files)).where(User.id == user.id)
+    # Загружаем пользователя со всеми связанными данными
+    query = (
+        select(User)
+        .options(
+            selectinload(User.files),
+            selectinload(User.participant_info)
+        )
+        .where(User.id == user.id)
+    )
     result = await session.execute(query)
-    user_with_files = result.scalar_one()
-
-    return user_with_files
+    user_with_data = result.scalar_one()
+    return user_with_data
 
 
 @router.post("/login", response_model=Token)
@@ -141,7 +156,14 @@ async def read_users_me(
         current_user: User = Depends(get_current_user),
         session: AsyncSession = Depends(get_session)
 ):
-    query = select(User).options(selectinload(User.files)).where(User.id == current_user.id)
+    query = (
+        select(User)
+        .options(
+            selectinload(User.files),
+            selectinload(User.participant_info)
+        )
+        .where(User.id == current_user.id)
+    )
     result = await session.execute(query)
     user = result.scalar_one_or_none()
     return user

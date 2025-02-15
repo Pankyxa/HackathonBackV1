@@ -15,11 +15,6 @@ class User(Base):
     email = Column(String(255), unique=True, nullable=False, index=True)
     password = Column(String(512), nullable=False)
     full_name = Column(String(255), nullable=False, index=True)
-    number = Column(String(255), nullable=False)
-    vuz = Column(String(255), nullable=False)
-    vuz_direction = Column(String(255), nullable=False)
-    code_speciality = Column(String(255), nullable=False)
-    course = Column(String(255), nullable=False)
     registered_at = Column(DateTime(timezone=True), default=datetime.utcnow)
 
     # Relationships
@@ -27,6 +22,21 @@ class User(Base):
     teams_as_leader = relationship("Team", back_populates="team_leader")
     team_members = relationship("TeamMember", back_populates="user")
     files = relationship("File", back_populates="user", cascade="all, delete-orphan")
+    participant_info = relationship("ParticipantInfo", back_populates="user", uselist=False)
+
+
+class ParticipantInfo(Base):
+    """Модель дополнительной информации участника"""
+    __tablename__ = 'participant_info'
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey('users.id'), nullable=False, unique=True)
+    number = Column(String(255), nullable=False)
+    vuz = Column(String(255), nullable=False)
+    vuz_direction = Column(String(255), nullable=False)
+    code_speciality = Column(String(255), nullable=False)
+    course = Column(String(255), nullable=False)
+    # Relationships
+    user = relationship("User", back_populates="participant_info")
 
 
 class User2Roles(Base):

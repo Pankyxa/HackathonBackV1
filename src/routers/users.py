@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_, and_, not_, exists
+from sqlalchemy.orm import selectinload
 from typing import List
 
 from src.auth.jwt import get_current_user
@@ -27,6 +28,7 @@ async def search_users(
 
     stmt = (
         select(User)
+        .options(selectinload(User.participant_info))
         .where(
             and_(
                 User.full_name.ilike(search_query),
