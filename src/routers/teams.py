@@ -1,14 +1,18 @@
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, status, File, Form, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, Form
+from fastapi import File as UploadFile  # переименовываем импорт File из FastAPI
+from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, exists
 from typing import List
 import json
 from uuid import UUID
+import os
 
 from src.db import get_session
 from src.models import User, Team, TeamMember
+from src.models.file import File as DBFile  # явно импортируем модель File с другим именем
 from src.models.enums import TeamMemberStatus, TeamRole, FileType, FileOwnerType
 from src.schemas.team import TeamCreate, TeamResponse, TeamMemberResponse, TeamMemberCreate, TeamInvitationResponse
 from src.auth.jwt import get_current_user
@@ -22,7 +26,7 @@ async def create_team(
         team_name: str = Form(...),
         team_motto: str = Form(...),
         member_ids: str = Form(default="[]"),
-        logo: UploadFile = File(...),
+        logo: UploadFile = UploadFile(...),
         current_user: User = Depends(get_current_user),
         session: AsyncSession = Depends(get_session)
 ):
@@ -280,3 +284,42 @@ async def get_teams(
     result = await session.execute(query)
     teams = result.scalars().all()
     return teams
+
+
+@router.get("/{team_id}/logo")
+async def get_team_logo(
+    team_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session)
+):
+    """Получить логотип команды"""
+    query = select(Team).where(Team.id == team_id)
+    team = await session.execute(query)
+    team = team.scalar_one_or_none()
+
+    if not team:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Команда не найдена"
+        )
+
+    if not team.logo_file_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="У команды нет логотипа"
+        )
+
+    logo_query = select(DBFile).where(DBFile.id == team.logo_file_id)
+    logo_file = await session.execute(logo_query)
+    logo_file = logo_file.scalar_one_or_none()
+
+    if not logo_file or not os.path.exists(logo_file.file_path):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Файл логотипа не найден"
+        )
+
+    return FileResponse(
+        logo_file.file_path,
+        filename=logo_file.filename,
+        media_type=f"image/{str(logo_file.file_format).lower()}"
+    )
