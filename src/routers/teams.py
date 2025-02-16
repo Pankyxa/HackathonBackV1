@@ -1,7 +1,6 @@
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, Form
-from fastapi import File as UploadFile  # переименовываем импорт File из FastAPI
+from fastapi import APIRouter, Depends, HTTPException, status, File, UploadFile, Form
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, exists
@@ -288,8 +287,8 @@ async def get_teams(
 
 @router.get("/{team_id}/logo")
 async def get_team_logo(
-    team_id: uuid.UUID,
-    session: AsyncSession = Depends(get_session)
+        team_id: uuid.UUID,
+        session: AsyncSession = Depends(get_session)
 ):
     """Получить логотип команды"""
     query = select(Team).where(Team.id == team_id)
@@ -323,3 +322,137 @@ async def get_team_logo(
         filename=logo_file.filename,
         media_type=f"image/{str(logo_file.file_format).lower()}"
     )
+
+@router.delete("/{team_id}/members/{member_id}")
+async def remove_team_member(
+        team_id: uuid.UUID,
+        member_id: uuid.UUID,
+        current_user: User = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session)
+):
+    """Удалить участника из команды"""
+    team_query = select(Team).where(Team.id == team_id)
+    team = await session.execute(team_query)
+    team = team.scalar_one_or_none()
+
+    if not team:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Команда не найдена"
+        )
+
+    if team.team_leader_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Только лидер команды может удалять участников"
+        )
+
+    member_query = select(TeamMember).where(
+        TeamMember.team_id == team_id,
+        TeamMember.user_id == member_id,
+        TeamMember.status == TeamMemberStatus.ACCEPTED
+    )
+    team_member = await session.execute(member_query)
+    team_member = team_member.scalar_one_or_none()
+
+    if not team_member:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Участник не найден в команде"
+        )
+
+    # Нельзя удалить лидера команды
+    if team_member.role == TeamRole.TEAMLEAD:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Невозможно удалить лидера команды"
+        )
+
+    await session.delete(team_member)
+    await session.commit()
+
+    return {"message": "Участник успешно удален из команды"}
+
+
+@router.put("/{team_id}/logo")
+async def update_team_logo(
+        team_id: uuid.UUID,
+        logo: UploadFile = UploadFile(...),
+        current_user: User = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session)
+):
+    """Обновить логотип команды"""
+    team_query = select(Team).where(Team.id == team_id)
+    team = await session.execute(team_query)
+    team = team.scalar_one_or_none()
+
+    if not team:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Команда не найдена"
+        )
+
+    if team.team_leader_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Только лидер команды может изменять логотип"
+        )
+
+    new_logo = await save_file(
+        upload_file=logo,
+        owner_id=team.id,
+        file_type=FileType.TEAM_LOGO,
+        owner_type=FileOwnerType.TEAM
+    )
+    session.add(new_logo)
+    await session.flush()
+
+    old_logo_id = team.logo_file_id
+
+    team.logo_file_id = new_logo.id
+    await session.flush()
+
+    if old_logo_id:
+        old_logo_query = select(DBFile).where(DBFile.id == old_logo_id)
+        old_logo = await session.execute(old_logo_query)
+        old_logo = old_logo.scalar_one_or_none()
+        if old_logo:
+            if os.path.exists(old_logo.file_path):
+                os.remove(old_logo.file_path)
+            await session.delete(old_logo)
+
+    await session.commit()
+
+    return {"message": "Логотип команды успешно обновлен"}
+
+@router.put("/{team_id}")
+async def update_team_info(
+        team_id: uuid.UUID,
+        team_name: str = Form(...),
+        team_motto: str = Form(...),
+        current_user: User = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session)
+):
+    """Обновить название и девиз команды"""
+    team_query = select(Team).where(Team.id == team_id)
+    team = await session.execute(team_query)
+    team = team.scalar_one_or_none()
+
+    if not team:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Команда не найдена"
+        )
+
+    if team.team_leader_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Только лидер команды может изменять информацию о команде"
+        )
+
+    team.team_name = team_name
+    team.team_motto = team_motto
+    await session.commit()
+    await session.refresh(team)
+
+    return team

@@ -8,11 +8,11 @@ from src.schemas.participant_info import ParticipantInfoResponse
 
 class UserBase(BaseModel):
     email: EmailStr
-    full_name: Optional[str] = None
 
 
 class UserCreate(UserBase):
     password: str
+    full_name: Optional[str] = None
     number: str
     vuz: str
     vuz_direction: str
