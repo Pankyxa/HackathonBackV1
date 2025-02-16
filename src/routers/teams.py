@@ -9,11 +9,14 @@ import json
 from uuid import UUID
 import os
 
+from sqlalchemy.orm import joinedload
+
 from src.db import get_session
 from src.models import User, Team, TeamMember
-from src.models.file import File as DBFile  # явно импортируем модель File с другим именем
+from src.models.file import File as DBFile
 from src.models.enums import TeamMemberStatus, TeamRole, FileType, FileOwnerType
-from src.schemas.team import TeamCreate, TeamResponse, TeamMemberResponse, TeamMemberCreate, TeamInvitationResponse
+from src.schemas.team import TeamCreate, TeamResponse, TeamMemberResponse, TeamMemberCreate, TeamInvitationResponse, \
+    TeamMembersResponse, TeamMemberDetailResponse
 from src.auth.jwt import get_current_user
 from src.routers.auth import save_file
 
@@ -284,6 +287,73 @@ async def get_teams(
     teams = result.scalars().all()
     return teams
 
+@router.get("/{team_id}", response_model=TeamResponse)
+async def get_team(
+        team_id: uuid.UUID,
+        current_user: User = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session)
+):
+    """Получить информацию о команде по ID"""
+    team_query = (
+        select(Team)
+        .where(Team.id == team_id)
+    )
+    team = await session.execute(team_query)
+    team = team.scalar_one_or_none()
+
+    if not team:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Команда не найдена"
+        )
+
+    member_query = select(TeamMember).where(
+        TeamMember.team_id == team_id,
+        TeamMember.user_id == current_user.id,
+        TeamMember.status == TeamMemberStatus.ACCEPTED
+    )
+    is_member = await session.execute(member_query)
+    if not is_member.scalar_one_or_none():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="У вас нет доступа к информации об этой команде"
+        )
+
+    return team
+
+@router.get("/my/team", response_model=TeamResponse)
+async def get_my_team(
+        current_user: User = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session)
+):
+    """Получить информацию о своей команде"""
+    member_query = (
+        select(TeamMember)
+        .where(
+            TeamMember.user_id == current_user.id,
+            TeamMember.status == TeamMemberStatus.ACCEPTED
+        )
+    )
+    my_membership = await session.execute(member_query)
+    my_membership = my_membership.scalar_one_or_none()
+
+    if not my_membership:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Вы не состоите в команде"
+        )
+
+    team_query = select(Team).where(Team.id == my_membership.team_id)
+    team = await session.execute(team_query)
+    team = team.scalar_one_or_none()
+
+    if not team:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Команда не найдена"
+        )
+
+    return team
 
 @router.get("/{team_id}/logo")
 async def get_team_logo(
@@ -349,7 +419,7 @@ async def remove_team_member(
 
     member_query = select(TeamMember).where(
         TeamMember.team_id == team_id,
-        TeamMember.user_id == member_id,
+        TeamMember.id == member_id,
         TeamMember.status == TeamMemberStatus.ACCEPTED
     )
     team_member = await session.execute(member_query)
@@ -361,7 +431,6 @@ async def remove_team_member(
             detail="Участник не найден в команде"
         )
 
-    # Нельзя удалить лидера команды
     if team_member.role == TeamRole.TEAMLEAD:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -456,3 +525,69 @@ async def update_team_info(
     await session.refresh(team)
 
     return team
+
+@router.get("/{team_id}/members", response_model=TeamMembersResponse)
+async def get_team_members(
+        team_id: uuid.UUID,
+        current_user: User = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session)
+):
+    """Получить список всех участников команды"""
+    team_query = (
+        select(Team)
+        .where(Team.id == team_id)
+    )
+    team = await session.execute(team_query)
+    team = team.scalar_one_or_none()
+
+    if not team:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Команда не найдена"
+        )
+
+    member_query = select(TeamMember).where(
+        TeamMember.team_id == team_id,
+        TeamMember.user_id == current_user.id,
+        TeamMember.status == TeamMemberStatus.ACCEPTED
+    )
+    is_member = await session.execute(member_query)
+    if not is_member.scalar_one_or_none():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="У вас нет доступа к информации об участниках этой команды"
+        )
+
+    members_query = (
+        select(TeamMember)
+        .options(
+            joinedload(TeamMember.user).joinedload(User.participant_info)
+        )
+        .where(
+            TeamMember.team_id == team_id,
+            TeamMember.status == TeamMemberStatus.ACCEPTED
+        )
+    )
+
+    result = await session.execute(members_query)
+    members = result.unique().scalars().all()
+
+    return TeamMembersResponse(
+        team_id=team.id,
+        team_name=team.team_name,
+        team_motto=team.team_motto,
+        team_leader_id=team.team_leader_id,
+        logo_file_id=team.logo_file_id,
+        members=[
+            TeamMemberDetailResponse(
+                id=member.id,
+                user=member.user,
+                role=member.role,
+                status=member.status,
+                created_at=member.created_at,
+                updated_at=member.updated_at
+            ) for member in members
+        ]
+    )
+
+
