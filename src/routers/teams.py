@@ -591,3 +591,83 @@ async def get_team_members(
     )
 
 
+@router.delete("/{team_id}")
+async def delete_team(
+        team_id: uuid.UUID,
+        current_user: User = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session)
+):
+    """Удалить команду (только для лидера команды)"""
+    team_query = select(Team).where(Team.id == team_id)
+    team = await session.execute(team_query)
+    team = team.scalar_one_or_none()
+
+    if not team:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Команда не найдена"
+        )
+
+    if team.team_leader_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Только лидер команды может удалить команду"
+        )
+
+    logo_file_id = team.logo_file_id
+
+    if logo_file_id:
+        team.logo_file_id = None
+        await session.flush()
+
+    members_query = select(TeamMember).where(TeamMember.team_id == team_id)
+    members = await session.execute(members_query)
+    for member in members.scalars():
+        await session.delete(member)
+    await session.flush()
+
+    await session.delete(team)
+    await session.flush()
+
+    if logo_file_id:
+        logo_query = select(DBFile).where(DBFile.id == logo_file_id)
+        logo_file = await session.execute(logo_query)
+        logo_file = logo_file.scalar_one_or_none()
+        if logo_file:
+            if os.path.exists(logo_file.file_path):
+                os.remove(logo_file.file_path)
+            await session.delete(logo_file)
+
+    await session.commit()
+
+    return {"message": "Команда успешно удалена"}
+
+@router.post("/leave")
+async def leave_team(
+        current_user: User = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session)
+):
+    """Выйти из команды (недоступно для лидера команды)"""
+    member_query = select(TeamMember).where(
+        TeamMember.user_id == current_user.id,
+        TeamMember.status == TeamMemberStatus.ACCEPTED
+    )
+    member = await session.execute(member_query)
+    member = member.scalar_one_or_none()
+
+    if not member:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Вы не состоите в команде"
+        )
+
+    if member.role == TeamRole.TEAMLEAD:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Лидер команды не может выйти из команды. Передайте права лидера другому участнику или удалите команду"
+        )
+
+    await session.delete(member)
+    await session.commit()
+
+    return {"message": "Вы успешно вышли из команды"}
