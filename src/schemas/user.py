@@ -5,6 +5,7 @@ from pydantic import BaseModel, EmailStr
 
 from src.schemas.enum_tables import RoleResponse
 from src.schemas.file import FileResponse
+from src.schemas.mentor_info import MentorInfoResponse
 from src.schemas.participant_info import ParticipantInfoResponse
 
 
@@ -22,6 +23,14 @@ class UserCreate(UserBase):
     course: str
 
 
+class MentorCreate(UserBase):
+    password: str
+    full_name: str
+    number: str
+    job: str
+    job_title: str
+
+
 class UserLogin(UserBase):
     password: str
 
@@ -37,6 +46,7 @@ class UserResponse(BaseModel):
     full_name: str
     registered_at: datetime.datetime
     participant_info: Optional[ParticipantInfoResponse] = None
+    mentor_info: Optional[MentorInfoResponse] = None
     roles: List[RoleResponse] = []
 
     class Config:

@@ -23,6 +23,7 @@ class User(Base):
     team_members = relationship("TeamMember", back_populates="user")
     files = relationship("File", back_populates="user", cascade="all, delete-orphan")
     participant_info = relationship("ParticipantInfo", back_populates="user", uselist=False)
+    mentor_info = relationship("MentorInfo", back_populates="user", uselist=False)
 
     @property
     def roles(self):
@@ -41,6 +42,18 @@ class ParticipantInfo(Base):
     course = Column(String(255), nullable=False)
     # Relationships
     user = relationship("User", back_populates="participant_info")
+
+
+class MentorInfo(Base):
+    """Модель дополнительной информации наставника"""
+    __tablename__ = 'mentor_info'
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey('users.id'), nullable=False, unique=True)
+    number = Column(String(255), nullable=False)
+    job = Column(String(255), nullable=False)
+    job_title = Column(String(255), nullable=False)
+    # Relationships
+    user = relationship("User", back_populates="mentor_info")
 
 
 class User2Roles(Base):

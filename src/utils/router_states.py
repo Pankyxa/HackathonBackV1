@@ -46,6 +46,7 @@ class FileRouterState:
 
         self.consent_type_id = enum_data.get_file_type_id(FileType.CONSENT)
         self.education_certificate_type_id = enum_data.get_file_type_id(FileType.EDUCATION_CERTIFICATE)
+        self.job_certificate_type_id = enum_data.get_file_type_id(FileType.JOB_CERTIFICATE)
         self.team_logo_type_id = enum_data.get_file_type_id(FileType.TEAM_LOGO)
 
         self.user_owner_type_id = enum_data.get_file_owner_type_id(FileOwnerType.USER)

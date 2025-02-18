@@ -98,6 +98,7 @@ async def init_models(engine: AsyncEngine):
         file_types_data = [
             {"name": FileType.CONSENT.value, "description": "Согласие"},
             {"name": FileType.EDUCATION_CERTIFICATE.value, "description": "Сертификат об образовании"},
+            {"name": FileType.JOB_CERTIFICATE.value, "description": "Сертификат с места работы"},
             {"name": FileType.TEAM_LOGO.value, "description": "Логотип команды"}
         ]
 

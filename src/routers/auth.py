@@ -10,8 +10,8 @@ import aiofiles
 from src.auth.utils import verify_password, get_password_hash
 from src.db import get_session
 from src.models import User, FileFormat, FileType, FileOwnerType, File as FileModel, ParticipantInfo, Role
-from src.models.user import User2Roles
-from src.schemas.user import UserCreate, UserLogin, Token, UserResponse, UserResponseRegister
+from src.models.user import User2Roles, MentorInfo
+from src.schemas.user import UserCreate, UserLogin, Token, UserResponse, UserResponseRegister, MentorCreate
 from src.auth.jwt import create_access_token, get_current_user
 
 from src.utils.router_states import file_router_state, user_router_state
@@ -37,6 +37,8 @@ async def save_file(
         file_type_id = file_router_state.education_certificate_type_id
     elif file_type == FileType.TEAM_LOGO:
         file_type_id = file_router_state.team_logo_type_id
+    elif file_type == FileType.JOB_CERTIFICATE:
+        file_type_id = file_router_state.job_certificate_type_id
     else:
         raise ValueError(f"Неизвестный тип файла: {file_type}")
 
@@ -150,6 +152,90 @@ async def register(
     )
     result = await session.execute(query)
     user_with_data = result.scalar_one()
+    user_with_data.mentor_info = None
+    return user_with_data
+
+
+@router.post("/register/mentor", response_model=UserResponseRegister)
+async def register_mentor(
+        email: str = Form(...),
+        password: str = Form(...),
+        full_name: str = Form(...),
+        number: str = Form(...),
+        job: str = Form(...),
+        job_title: str = Form(...),
+        consent_file: UploadFile = File(...),
+        job_certificate_file: UploadFile = File(...),
+        session: AsyncSession = Depends(get_session)
+):
+    mentor_data = MentorCreate(
+        email=email,
+        password=password,
+        full_name=full_name,
+        number=number,
+        job=job,
+        job_title=job_title
+    )
+
+    # Проверка существования email
+    query = select(User).where(User.email == mentor_data.email)
+    result = await session.execute(query)
+    if result.scalar_one_or_none():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email уже зарегистрирован"
+        )
+
+    # Создание пользователя
+    user = User(
+        id=uuid.uuid4(),
+        email=mentor_data.email,
+        password=get_password_hash(mentor_data.password),
+        full_name=mentor_data.full_name,
+    )
+
+    # Создание информации о менторе
+    mentor_info = MentorInfo(
+        id=uuid.uuid4(),
+        user_id=user.id,
+        number=mentor_data.number,
+        job=mentor_data.job,
+        job_title=mentor_data.job_title
+    )
+
+    role = User2Roles(
+        id=uuid.uuid4(),
+        user_id=user.id,
+        role_id=user_router_state.mentor_role_id,
+    )
+
+    session.add(user)
+    session.add(mentor_info)
+    session.add(role)
+
+    consent_file_model = await save_file(consent_file, user.id, FileType.CONSENT, FileOwnerType.USER)
+    job_certificate_model = await save_file(job_certificate_file, user.id, FileType.JOB_CERTIFICATE, FileOwnerType.USER)
+
+    session.add(consent_file_model)
+    session.add(job_certificate_model)
+
+    await session.commit()
+    await session.refresh(user)
+
+    query = (
+        select(User)
+        .options(
+            selectinload(User.files).selectinload(FileModel.file_format),
+            selectinload(User.files).selectinload(FileModel.file_type),
+            selectinload(User.files).selectinload(FileModel.owner_type),
+            selectinload(User.mentor_info),
+            selectinload(User.user2roles).selectinload(User2Roles.role)
+        )
+        .where(User.id == user.id)
+    )
+    result = await session.execute(query)
+    user_with_data = result.scalar_one()
+    user_with_data.participant_info = None
     return user_with_data
 
 
@@ -182,6 +268,7 @@ async def read_users_me(
         .options(
             selectinload(User.files),
             selectinload(User.participant_info),
+            selectinload(User.mentor_info),
             selectinload(User.user2roles).selectinload(User2Roles.role),
         )
         .where(User.id == current_user.id)
