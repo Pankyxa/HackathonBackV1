@@ -8,6 +8,7 @@ from pydantic import BaseModel, constr
 
 from src.models import TeamRole
 from src.models.enums import TeamMemberStatus
+from src.schemas.enum_tables import TeamRoleResponse, TeamMemberStatusResponse
 from src.schemas.user import UserResponse
 
 class TeamCreate(BaseModel):
@@ -33,8 +34,8 @@ class TeamMemberResponse(BaseModel):
     id: UUID
     team_id: UUID
     user_id: UUID
-    role: TeamRole
-    status: TeamMemberStatus
+    role: TeamRoleResponse
+    status: TeamMemberStatusResponse
     created_at: datetime.datetime
     updated_at: datetime.datetime | None
 
@@ -44,8 +45,8 @@ class TeamMemberResponse(BaseModel):
 class TeamMemberDetailResponse(BaseModel):
     id: UUID
     user: UserResponse
-    role: TeamRole
-    status: TeamMemberStatus
+    role: str
+    status: str
     created_at: datetime.datetime
     updated_at: Optional[datetime.datetime] = None
 

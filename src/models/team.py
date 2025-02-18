@@ -1,13 +1,12 @@
 from datetime import datetime
 
-from sqlalchemy import Column, String, ForeignKey, Enum as SQLAlchemyEnum, DateTime
+from sqlalchemy import Column, String, ForeignKey, DateTime
 from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.postgresql import UUID
 import uuid
 
 from src.db import Base
 from . import File
-from .enums import TeamRole, TeamMemberStatus
 
 
 class Team(Base):
@@ -34,11 +33,13 @@ class TeamMember(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     team_id = Column(UUID(as_uuid=True), ForeignKey('teams.id'), nullable=False)
     user_id = Column(UUID(as_uuid=True), ForeignKey('users.id'), nullable=False)
-    role = Column(SQLAlchemyEnum(TeamRole), nullable=False)
-    status = Column(SQLAlchemyEnum(TeamMemberStatus), nullable=False, default=TeamMemberStatus.PENDING)
+    role_id = Column(UUID(as_uuid=True), ForeignKey('team_roles.id'), nullable=False)
+    status_id = Column(UUID(as_uuid=True), ForeignKey('team_member_statuses.id'), nullable=False)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at = Column(DateTime(timezone=True), onupdate=datetime.utcnow)
 
     # Relationships
     team = relationship("Team", back_populates="members")
     user = relationship("User", back_populates="team_members")
+    role = relationship("TeamRoleTable", lazy="joined")
+    status = relationship("TeamMemberStatusTable", lazy="joined")

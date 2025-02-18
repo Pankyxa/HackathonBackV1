@@ -9,9 +9,12 @@ import aiofiles
 
 from src.auth.utils import verify_password, get_password_hash
 from src.db import get_session
-from src.models import User, FileFormat, FileType, FileOwnerType, File as FileModel, ParticipantInfo
+from src.models import User, FileFormat, FileType, FileOwnerType, File as FileModel, ParticipantInfo, Role
+from src.models.user import User2Roles
 from src.schemas.user import UserCreate, UserLogin, Token, UserResponse, UserResponseRegister
 from src.auth.jwt import create_access_token, get_current_user
+
+from src.utils.router_states import file_router_state, user_router_state
 
 security = HTTPBearer()
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -24,7 +27,20 @@ async def save_file(
     owner_type: FileOwnerType
 ) -> FileModel:
     """Сохранение файла с указанием владельца"""
-    base_dir = "uploads/users" if owner_type == FileOwnerType.USER else "uploads/teams"
+    owner_type_id = (file_router_state.user_owner_type_id
+                     if owner_type == FileOwnerType.USER
+                     else file_router_state.team_owner_type_id)
+
+    if file_type == FileType.CONSENT:
+        file_type_id = file_router_state.consent_type_id
+    elif file_type == FileType.EDUCATION_CERTIFICATE:
+        file_type_id = file_router_state.education_certificate_type_id
+    elif file_type == FileType.TEAM_LOGO:
+        file_type_id = file_router_state.team_logo_type_id
+    else:
+        raise ValueError(f"Неизвестный тип файла: {file_type}")
+
+    base_dir = "uploads/users" if owner_type_id == file_router_state.user_owner_type_id else "uploads/teams"
     upload_dir = f"{base_dir}/{owner_id}"
     os.makedirs(upload_dir, exist_ok=True)
 
@@ -36,15 +52,15 @@ async def save_file(
         content = await upload_file.read()
         await out_file.write(content)
 
-    file_format = FileFormat.PDF if file_extension.lower() == '.pdf' else FileFormat.IMAGE
+    file_format_id = file_router_state.pdf_format_id if file_extension.lower() == '.pdf' else file_router_state.image_format_id
 
     file_model = FileModel(
         id=uuid.uuid4(),
         filename=upload_file.filename,
         file_path=file_path,
-        file_format=file_format,
-        file_type=file_type,
-        owner_type=owner_type,
+        file_format_id=file_format_id,
+        file_type_id=file_type_id,
+        owner_type_id=owner_type_id,
         user_id=owner_id if owner_type == FileOwnerType.USER else None,
         team_id=owner_id if owner_type == FileOwnerType.TEAM else None
     )
@@ -66,7 +82,6 @@ async def register(
         education_certificate_file: UploadFile = File(...),
         session: AsyncSession = Depends(get_session)
 ):
-    # Create UserCreate object from form data
     user_data = UserCreate(
         email=email,
         password=password,
@@ -78,7 +93,6 @@ async def register(
         full_name=full_name
     )
 
-    # Check if email exists
     query = select(User).where(User.email == user_data.email)
     result = await session.execute(query)
     if result.scalar_one_or_none():
@@ -87,7 +101,6 @@ async def register(
             detail="Email уже зарегистрирован"
         )
 
-    # Create user
     user = User(
         id=uuid.uuid4(),
         email=user_data.email,
@@ -95,7 +108,6 @@ async def register(
         full_name=user_data.full_name,
     )
 
-    # Create participant info
     participant_info = ParticipantInfo(
         id=uuid.uuid4(),
         user_id=user.id,
@@ -106,8 +118,15 @@ async def register(
         course=user_data.course
     )
 
+    role = User2Roles(
+        id=uuid.uuid4(),
+        user_id=user.id,
+        role_id=user_router_state.participant_role_id,
+    )
+
     session.add(user)
     session.add(participant_info)
+    session.add(role)
 
     consent_file_model = await save_file(consent_file, user.id, FileType.CONSENT, FileOwnerType.USER)
     education_file_model = await save_file(education_certificate_file, user.id, FileType.EDUCATION_CERTIFICATE, FileOwnerType.USER)
@@ -118,12 +137,14 @@ async def register(
     await session.commit()
     await session.refresh(user)
 
-    # Загружаем пользователя со всеми связанными данными
     query = (
         select(User)
         .options(
-            selectinload(User.files),
-            selectinload(User.participant_info)
+            selectinload(User.files).selectinload(FileModel.file_format),
+            selectinload(User.files).selectinload(FileModel.file_type),
+            selectinload(User.files).selectinload(FileModel.owner_type),
+            selectinload(User.participant_info),
+            selectinload(User.user2roles).selectinload(User2Roles.role)
         )
         .where(User.id == user.id)
     )
@@ -160,10 +181,12 @@ async def read_users_me(
         select(User)
         .options(
             selectinload(User.files),
-            selectinload(User.participant_info)
+            selectinload(User.participant_info),
+            selectinload(User.user2roles).selectinload(User2Roles.role),
         )
         .where(User.id == current_user.id)
     )
     result = await session.execute(query)
     user = result.scalar_one_or_none()
+    print(user.roles)
     return user

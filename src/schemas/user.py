@@ -2,6 +2,8 @@ import datetime
 from typing import Optional, List
 from uuid import UUID
 from pydantic import BaseModel, EmailStr
+
+from src.schemas.enum_tables import RoleResponse
 from src.schemas.file import FileResponse
 from src.schemas.participant_info import ParticipantInfoResponse
 
@@ -35,6 +37,7 @@ class UserResponse(BaseModel):
     full_name: str
     registered_at: datetime.datetime
     participant_info: Optional[ParticipantInfoResponse] = None
+    roles: List[RoleResponse] = []
 
     class Config:
         from_attributes = True

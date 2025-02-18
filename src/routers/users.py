@@ -9,6 +9,7 @@ from src.db import get_session
 from src.models import User, TeamMember
 from src.models.enums import TeamMemberStatus
 from src.schemas.user import UserResponse
+from src.utils.router_states import team_router_state
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -26,6 +27,16 @@ async def search_users(
     """
     search_query = f"%{query}%"
 
+    current_user_team = (
+        select(TeamMember.team_id)
+        .where(
+            and_(
+                TeamMember.user_id == current_user.id,
+                TeamMember.status_id == team_router_state.accepted_status_id
+            )
+        )
+    )
+
     stmt = (
         select(User)
         .options(selectinload(User.participant_info))
@@ -38,7 +49,17 @@ async def search_users(
                         select(1)
                         .where(
                             TeamMember.user_id == User.id,
-                            TeamMember.status == TeamMemberStatus.ACCEPTED
+                            TeamMember.status_id == team_router_state.accepted_status_id,
+                            TeamMember.team_id == TeamMember.team_id,
+                        )
+                    )
+                ),
+                not_(
+                    exists(
+                        select(1)
+                        .where(
+                            TeamMember.user_id == User.id,
+                            TeamMember.team_id.in_(current_user_team)
                         )
                     )
                 )

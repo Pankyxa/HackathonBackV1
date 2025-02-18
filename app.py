@@ -1,8 +1,13 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.db import engine
+from src.init_db import init_models
 from src.routers import auth_router, teams_router, users_router
+from src.utils.enum_utils import initialize_enum_data
+from src.utils.router_states import initialize_router_states
 
 app = FastAPI(
     title="Хакатон API",
@@ -23,6 +28,13 @@ app.include_router(auth_router)
 app.include_router(teams_router)
 app.include_router(users_router)
 
+@app.on_event("startup")
+async def startup_event():
+    """Выполняется при запуске приложения"""
+    await init_models(engine)
+    async with AsyncSession(engine) as session:
+        await initialize_enum_data(session)
+        await initialize_router_states(session)
 
 def custom_openapi():
     if app.openapi_schema:

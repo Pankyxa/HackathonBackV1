@@ -1,5 +1,10 @@
 from enum import Enum
 
+class UserRole(str, Enum):
+    PARTICIPANT = "participant"
+    MENTOR = "mentor"
+    JURY = "jury"
+    ADMIN = "admin"
 
 class TeamRole(str, Enum):
     TEAMLEAD = "teamlead"

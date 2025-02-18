@@ -24,6 +24,10 @@ class User(Base):
     files = relationship("File", back_populates="user", cascade="all, delete-orphan")
     participant_info = relationship("ParticipantInfo", back_populates="user", uselist=False)
 
+    @property
+    def roles(self):
+        return [user2role.role for user2role in self.user2roles]
+
 
 class ParticipantInfo(Base):
     """Модель дополнительной информации участника"""

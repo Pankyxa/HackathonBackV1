@@ -12,15 +12,30 @@ import os
 from sqlalchemy.orm import joinedload
 
 from src.db import get_session
-from src.models import User, Team, TeamMember
+from src.models import User, Team, TeamMember, Role
 from src.models.file import File as DBFile
 from src.models.enums import TeamMemberStatus, TeamRole, FileType, FileOwnerType
 from src.schemas.team import TeamCreate, TeamResponse, TeamMemberResponse, TeamMemberCreate, TeamInvitationResponse, \
     TeamMembersResponse, TeamMemberDetailResponse
 from src.auth.jwt import get_current_user
 from src.routers.auth import save_file
+from src.utils.router_states import team_router_state
 
 router = APIRouter(prefix="/teams", tags=["teams"])
+
+def get_role_id(role: TeamRole) -> UUID:
+    if role == TeamRole.TEAMLEAD:
+        return team_router_state.teamlead_role_id
+    elif role == TeamRole.MENTOR:
+        return team_router_state.mentor_role_id
+    return team_router_state.member_role_id
+
+def get_status_id(status: TeamMemberStatus) -> UUID:
+    if status == TeamMemberStatus.PENDING:
+        return team_router_state.pending_status_id
+    elif status == TeamMemberStatus.ACCEPTED:
+        return team_router_state.accepted_status_id
+    return team_router_state.rejected_status_id
 
 
 @router.post("/create", response_model=TeamResponse)
@@ -54,8 +69,8 @@ async def create_team(
 
     existing_teamlead_query = select(TeamMember).where(
         TeamMember.user_id == current_user.id,
-        TeamMember.role == TeamRole.TEAMLEAD,
-        TeamMember.status == TeamMemberStatus.ACCEPTED
+        TeamMember.role_id == team_router_state.teamlead_role_id,
+        TeamMember.status_id == team_router_state.accepted_status_id
     )
     existing_teamlead = await session.execute(existing_teamlead_query)
     if existing_teamlead.scalar_one_or_none():
@@ -66,11 +81,11 @@ async def create_team(
 
     pending_invitations_query = select(TeamMember).where(
         TeamMember.user_id == current_user.id,
-        TeamMember.status == TeamMemberStatus.PENDING
+        TeamMember.status_id == team_router_state.pending_status_id
     )
     pending_invitations = await session.execute(pending_invitations_query)
     for invitation in pending_invitations.scalars():
-        invitation.status = TeamMemberStatus.REJECTED
+        invitation.status_id = team_router_state.rejected_status_id
     await session.flush()
 
     team = Team(
@@ -99,8 +114,8 @@ async def create_team(
         id=uuid.uuid4(),
         team_id=team.id,
         user_id=current_user.id,
-        role=TeamRole.TEAMLEAD,
-        status=TeamMemberStatus.ACCEPTED
+        role_id=team_router_state.teamlead_role_id,
+        status_id=team_router_state.accepted_status_id
     )
     session.add(team_leader_member)
 
@@ -110,7 +125,7 @@ async def create_team(
             if user_id != current_user.id:
                 existing_member_query = select(TeamMember).where(
                     TeamMember.user_id == user_id,
-                    TeamMember.status == TeamMemberStatus.ACCEPTED
+                    TeamMember.status_id == team_router_state.accepted_status_id
                 )
                 existing_member = await session.execute(existing_member_query)
                 if not existing_member.scalar_one_or_none():
@@ -118,8 +133,8 @@ async def create_team(
                         id=uuid.uuid4(),
                         team_id=team.id,
                         user_id=user_id,
-                        role=TeamRole.MEMBER,
-                        status=TeamMemberStatus.PENDING
+                        role_id=team_router_state.member_role_id,
+                        status_id=team_router_state.pending_status_id
                     )
                     team_members.append(team_member)
 
@@ -171,12 +186,12 @@ async def invite_team_member(
     existing_member = existing_member.scalar_one_or_none()
 
     if existing_member:
-        if existing_member.status == TeamMemberStatus.PENDING:
+        if existing_member.status_id == team_router_state.pending_status_id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Приглашение уже отправлено"
             )
-        elif existing_member.status == TeamMemberStatus.ACCEPTED:
+        elif existing_member.status_id == team_router_state.accepted_status_id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Пользователь уже является участником команды"
@@ -186,8 +201,8 @@ async def invite_team_member(
         id=uuid.uuid4(),
         team_id=team_id,
         user_id=member_data.user_id,
-        role=member_data.role,
-        status=TeamMemberStatus.PENDING
+        role_id=get_role_id(member_data.role),
+        status_id=team_router_state.pending_status_id,
     )
     session.add(team_member)
     await session.commit()
@@ -280,7 +295,7 @@ async def get_teams(
             select(1).where(
                 TeamMember.team_id == Team.id,
                 TeamMember.user_id == current_user.id,
-                TeamMember.status == TeamMemberStatus.ACCEPTED
+                TeamMember.status_id == team_router_state.accepted_status_id
             )
         ))
     result = await session.execute(query)
@@ -310,7 +325,7 @@ async def get_team(
     member_query = select(TeamMember).where(
         TeamMember.team_id == team_id,
         TeamMember.user_id == current_user.id,
-        TeamMember.status == TeamMemberStatus.ACCEPTED
+        TeamMember.status_id == team_router_state.accepted_status_id
     )
     is_member = await session.execute(member_query)
     if not is_member.scalar_one_or_none():
@@ -331,7 +346,7 @@ async def get_my_team(
         select(TeamMember)
         .where(
             TeamMember.user_id == current_user.id,
-            TeamMember.status == TeamMemberStatus.ACCEPTED
+            TeamMember.status_id == team_router_state.accepted_status_id
         )
     )
     my_membership = await session.execute(member_query)
@@ -420,7 +435,7 @@ async def remove_team_member(
     member_query = select(TeamMember).where(
         TeamMember.team_id == team_id,
         TeamMember.id == member_id,
-        TeamMember.status == TeamMemberStatus.ACCEPTED
+        TeamMember.status_id == team_router_state.accepted_status_id
     )
     team_member = await session.execute(member_query)
     team_member = team_member.scalar_one_or_none()
@@ -431,7 +446,7 @@ async def remove_team_member(
             detail="Участник не найден в команде"
         )
 
-    if team_member.role == TeamRole.TEAMLEAD:
+    if team_member.role_id == team_router_state.teamlead_role_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Невозможно удалить лидера команды"
@@ -549,7 +564,7 @@ async def get_team_members(
     member_query = select(TeamMember).where(
         TeamMember.team_id == team_id,
         TeamMember.user_id == current_user.id,
-        TeamMember.status == TeamMemberStatus.ACCEPTED
+        TeamMember.status_id == team_router_state.accepted_status_id
     )
     is_member = await session.execute(member_query)
     if not is_member.scalar_one_or_none():
@@ -565,7 +580,7 @@ async def get_team_members(
         )
         .where(
             TeamMember.team_id == team_id,
-            TeamMember.status == TeamMemberStatus.ACCEPTED
+            TeamMember.status_id == team_router_state.accepted_status_id
         )
     )
 
@@ -582,8 +597,8 @@ async def get_team_members(
             TeamMemberDetailResponse(
                 id=member.id,
                 user=member.user,
-                role=member.role,
-                status=member.status,
+                role=member.role.name,
+                status=member.status.name,
                 created_at=member.created_at,
                 updated_at=member.updated_at
             ) for member in members
@@ -650,7 +665,7 @@ async def leave_team(
     """Выйти из команды (недоступно для лидера команды)"""
     member_query = select(TeamMember).where(
         TeamMember.user_id == current_user.id,
-        TeamMember.status == TeamMemberStatus.ACCEPTED
+        TeamMember.status_id == team_router_state.accepted_status_id
     )
     member = await session.execute(member_query)
     member = member.scalar_one_or_none()
