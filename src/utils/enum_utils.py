@@ -5,11 +5,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models import (
     TeamRoleTable, TeamMemberStatusTable, FileFormatTable,
-    FileTypeTable, FileOwnerTypeTable, Role
-)
-from src.models.enums import (
+    FileTypeTable, FileOwnerTypeTable, Role,
     TeamRole, TeamMemberStatus, FileFormat,
-    FileType, FileOwnerType, UserRole
+    FileType, FileOwnerType, UserRole, UserStatus, UserStatusType
 )
 
 
@@ -21,6 +19,7 @@ class EnumData:
         self.file_type_ids: Dict[FileType, UUID] = {}
         self.file_owner_type_ids: Dict[FileOwnerType, UUID] = {}
         self.user_role_ids: Dict[UserRole, UUID] = {}
+        self.user_status_ids: Dict[UserStatus, UUID] = {}
 
     async def initialize(self, session: AsyncSession):
         """Инициализация всех ID из enum таблиц"""
@@ -48,6 +47,10 @@ class EnumData:
         for role in user_roles.scalars():
             self.user_role_ids[UserRole(role.name)] = role.id
 
+        user_statuses = await session.execute(select(UserStatusType))
+        for status in user_statuses.scalars():
+            self.user_status_ids[UserStatus(status.name)] = status.id
+
     def get_user_role_id(self, role: UserRole) -> UUID:
         return self.user_role_ids[role]
 
@@ -66,6 +69,10 @@ class EnumData:
     def get_file_owner_type_id(self, owner_type: FileOwnerType) -> UUID:
         return self.file_owner_type_ids[owner_type]
 
+    def get_user_status_id(self, status: UserStatus) -> UUID:
+        """Получение ID статуса пользователя"""
+        return self.user_status_ids[status]
+
 
 enum_data = EnumData()
 
@@ -78,4 +85,3 @@ async def initialize_enum_data(session: AsyncSession):
 def get_enum_data() -> EnumData:
     """Получение инициализированного экземпляра EnumData"""
     return enum_data
-

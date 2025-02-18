@@ -1,7 +1,7 @@
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 from src.db import Base
-from src.models import User, File, Team, Role, TeamMember
+from src.models import User, File, Team, Role, TeamMember, UserStatusType
 from src.models.enum_tables import (
     TeamRoleTable,
     TeamMemberStatusTable,
@@ -23,6 +23,24 @@ async def init_models(engine: AsyncEngine):
     )
 
     async with async_session() as session:
+        user_statuses_data = [
+            {"name": "pending", "description": "В ожидании"},
+            {"name": "approved", "description": "Подтвержден"},
+            {"name": "need_update", "description": "Отправлен на переотправление новых файлов"}
+        ]
+
+        for status_data in user_statuses_data:
+            existing_status = await session.execute(
+                UserStatusType.__table__.select().where(UserStatusType.name == status_data["name"])
+            )
+            if not list(existing_status):
+                status = UserStatusType(
+                    id=uuid.uuid4(),
+                    name=status_data["name"],
+                    description=status_data["description"]
+                )
+                session.add(status)
+
         roles_data = [
             {"name": "participant", "description": "Участник проекта"},
             {"name": "mentor", "description": "Наставник команды"},

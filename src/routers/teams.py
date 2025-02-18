@@ -9,19 +9,22 @@ import json
 from uuid import UUID
 import os
 
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import joinedload, selectinload
+from sqlalchemy.testing.plugin.plugin_base import options
 
 from src.db import get_session
-from src.models import User, Team, TeamMember, Role
+from src.models import User, Team, TeamMember, Role, UserStatusHistory
 from src.models.file import File as DBFile
 from src.models.enums import TeamMemberStatus, TeamRole, FileType, FileOwnerType
+from src.models.user import User2Roles
 from src.schemas.team import TeamCreate, TeamResponse, TeamMemberResponse, TeamMemberCreate, TeamInvitationResponse, \
-    TeamMembersResponse, TeamMemberDetailResponse
+    TeamMembersResponse, TeamMemberDetailResponse, TeamStatusDetails
 from src.auth.jwt import get_current_user
 from src.routers.auth import save_file
 from src.utils.router_states import team_router_state
 
 router = APIRouter(prefix="/teams", tags=["teams"])
+
 
 def get_role_id(role: TeamRole) -> UUID:
     if role == TeamRole.TEAMLEAD:
@@ -29,6 +32,7 @@ def get_role_id(role: TeamRole) -> UUID:
     elif role == TeamRole.MENTOR:
         return team_router_state.mentor_role_id
     return team_router_state.member_role_id
+
 
 def get_status_id(status: TeamMemberStatus) -> UUID:
     if status == TeamMemberStatus.PENDING:
@@ -143,7 +147,14 @@ async def create_team(
 
     await session.commit()
     await session.refresh(team)
-    return team
+    return TeamResponse(
+        id=team.id,
+        team_name=team.team_name,
+        team_motto=team.team_motto,
+        team_leader_id=team.team_leader_id,
+        logo_file_id=team.logo_file_id,
+        status_details=TeamStatusDetails(**team.get_status_details())
+    )
 
 
 @router.post("/{team_id}/members", response_model=TeamMemberResponse)
@@ -154,7 +165,19 @@ async def invite_team_member(
         session: AsyncSession = Depends(get_session)
 ):
     """Пригласить пользователя в команду"""
-    team_query = select(Team).where(Team.id == team_id)
+    team_query = (
+        select(Team)
+        .options(
+            selectinload(Team.members)
+            .selectinload(TeamMember.user)
+            .selectinload(User.current_status),
+            selectinload(Team.members)
+            .selectinload(TeamMember.role),
+            selectinload(Team.members)
+            .selectinload(TeamMember.status)
+        )
+        .where(Team.id == team_id)
+    )
     team = await session.execute(team_query)
     team = team.scalar_one_or_none()
     if not team:
@@ -290,17 +313,40 @@ async def get_teams(
         session: AsyncSession = Depends(get_session)
 ):
     """Получить список команд пользователя"""
-    query = select(Team).where(
-        exists(
-            select(1).where(
-                TeamMember.team_id == Team.id,
-                TeamMember.user_id == current_user.id,
-                TeamMember.status_id == team_router_state.accepted_status_id
-            )
-        ))
+    query = (
+        select(Team)
+        .options(
+            selectinload(Team.members)
+            .selectinload(TeamMember.user)
+            .selectinload(User.current_status),
+            selectinload(Team.members)
+            .selectinload(TeamMember.role),
+            selectinload(Team.members)
+            .selectinload(TeamMember.status)
+        )
+        .where(
+            exists(
+                select(1).where(
+                    TeamMember.team_id == Team.id,
+                    TeamMember.user_id == current_user.id,
+                    TeamMember.status_id == team_router_state.accepted_status_id
+                )
+            ))
+    )
     result = await session.execute(query)
     teams = result.scalars().all()
-    return teams
+    return [
+        TeamResponse(
+            id=team.id,
+            team_name=team.team_name,
+            team_motto=team.team_motto,
+            team_leader_id=team.team_leader_id,
+            logo_file_id=team.logo_file_id,
+            status_details=TeamStatusDetails(**team.get_status_details())
+        )
+        for team in teams
+    ]
+
 
 @router.get("/{team_id}", response_model=TeamResponse)
 async def get_team(
@@ -334,7 +380,15 @@ async def get_team(
             detail="У вас нет доступа к информации об этой команде"
         )
 
-    return team
+    return TeamResponse(
+            id=team.id,
+            team_name=team.team_name,
+            team_motto=team.team_motto,
+            team_leader_id=team.team_leader_id,
+            logo_file_id=team.logo_file_id,
+            status_details=TeamStatusDetails(**team.get_status_details())
+        )
+
 
 @router.get("/my/team", response_model=TeamResponse)
 async def get_my_team(
@@ -358,7 +412,19 @@ async def get_my_team(
             detail="Вы не состоите в команде"
         )
 
-    team_query = select(Team).where(Team.id == my_membership.team_id)
+    team_query = (
+        select(Team)
+        .options(
+            selectinload(Team.members)
+            .selectinload(TeamMember.user)
+            .selectinload(User.current_status),
+            selectinload(Team.members)
+            .selectinload(TeamMember.role),
+            selectinload(Team.members)
+            .selectinload(TeamMember.status)
+        )
+        .where(Team.id == my_membership.team_id)
+    )
     team = await session.execute(team_query)
     team = team.scalar_one_or_none()
 
@@ -368,7 +434,15 @@ async def get_my_team(
             detail="Команда не найдена"
         )
 
-    return team
+    return TeamResponse(
+            id=team.id,
+            team_name=team.team_name,
+            team_motto=team.team_motto,
+            team_leader_id=team.team_leader_id,
+            logo_file_id=team.logo_file_id,
+            status_details=TeamStatusDetails(**team.get_status_details())
+        )
+
 
 @router.get("/{team_id}/logo")
 async def get_team_logo(
@@ -407,6 +481,7 @@ async def get_team_logo(
         filename=logo_file.filename,
         media_type=f"image/{str(logo_file.file_format).lower()}"
     )
+
 
 @router.delete("/{team_id}/members/{member_id}")
 async def remove_team_member(
@@ -509,6 +584,7 @@ async def update_team_logo(
 
     return {"message": "Логотип команды успешно обновлен"}
 
+
 @router.put("/{team_id}")
 async def update_team_info(
         team_id: uuid.UUID,
@@ -540,6 +616,7 @@ async def update_team_info(
     await session.refresh(team)
 
     return team
+
 
 @router.get("/{team_id}/members", response_model=TeamMembersResponse)
 async def get_team_members(
@@ -576,7 +653,13 @@ async def get_team_members(
     members_query = (
         select(TeamMember)
         .options(
-            joinedload(TeamMember.user).joinedload(User.participant_info)
+            joinedload(TeamMember.user).joinedload(User.participant_info),
+            joinedload(TeamMember.user).joinedload(User.mentor_info),
+            joinedload(TeamMember.user).joinedload(User.user2roles).joinedload(User2Roles.role),
+            joinedload(TeamMember.user).joinedload(User.current_status),
+            joinedload(TeamMember.user).joinedload(User.status_history).joinedload(UserStatusHistory.status),
+            joinedload(TeamMember.role),
+            joinedload(TeamMember.status)
         )
         .where(
             TeamMember.team_id == team_id,
@@ -656,6 +739,7 @@ async def delete_team(
     await session.commit()
 
     return {"message": "Команда успешно удалена"}
+
 
 @router.post("/leave")
 async def leave_team(

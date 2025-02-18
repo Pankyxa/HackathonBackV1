@@ -8,8 +8,9 @@ from src.auth.jwt import get_current_user
 from src.db import get_session
 from src.models import User, TeamMember
 from src.models.enums import TeamMemberStatus
+from src.models.user import User2Roles, UserStatusHistory
 from src.schemas.user import UserResponse
-from src.utils.router_states import team_router_state
+from src.utils.router_states import team_router_state, user_router_state
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -39,11 +40,24 @@ async def search_users(
 
     stmt = (
         select(User)
-        .options(selectinload(User.participant_info))
+        .options(
+            selectinload(User.participant_info),
+            selectinload(User.mentor_info),
+            selectinload(User.user2roles).selectinload(User2Roles.role),
+            selectinload(User.current_status),
+            selectinload(User.status_history).selectinload(UserStatusHistory.status),
+        )
         .where(
             and_(
                 User.full_name.ilike(search_query),
                 User.id != current_user.id,
+                exists(
+                    select(1)
+                    .where(
+                        User2Roles.user_id == User.id,
+                        User2Roles.role_id == user_router_state.participant_role_id
+                    )
+                ),
                 not_(
                     exists(
                         select(1)

@@ -10,7 +10,7 @@ import aiofiles
 from src.auth.utils import verify_password, get_password_hash
 from src.db import get_session
 from src.models import User, FileFormat, FileType, FileOwnerType, File as FileModel, ParticipantInfo, Role
-from src.models.user import User2Roles, MentorInfo
+from src.models.user import User2Roles, MentorInfo, UserStatusHistory
 from src.schemas.user import UserCreate, UserLogin, Token, UserResponse, UserResponseRegister, MentorCreate
 from src.auth.jwt import create_access_token, get_current_user
 
@@ -21,10 +21,10 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 
 async def save_file(
-    upload_file: UploadFile,
-    owner_id: uuid.UUID,
-    file_type: FileType,
-    owner_type: FileOwnerType
+        upload_file: UploadFile,
+        owner_id: uuid.UUID,
+        file_type: FileType,
+        owner_type: FileOwnerType
 ) -> FileModel:
     """Сохранение файла с указанием владельца"""
     owner_type_id = (file_router_state.user_owner_type_id
@@ -108,6 +108,14 @@ async def register(
         email=user_data.email,
         password=get_password_hash(user_data.password),
         full_name=user_data.full_name,
+        current_status_id=user_router_state.pending_status_id,
+    )
+
+    status_history = UserStatusHistory(
+        id=uuid.uuid4(),
+        user_id=user.id,
+        status_id=user_router_state.pending_status_id,
+        comment="Начальный статус при регистрации"
     )
 
     participant_info = ParticipantInfo(
@@ -127,11 +135,13 @@ async def register(
     )
 
     session.add(user)
+    session.add(status_history)
     session.add(participant_info)
     session.add(role)
 
     consent_file_model = await save_file(consent_file, user.id, FileType.CONSENT, FileOwnerType.USER)
-    education_file_model = await save_file(education_certificate_file, user.id, FileType.EDUCATION_CERTIFICATE, FileOwnerType.USER)
+    education_file_model = await save_file(education_certificate_file, user.id, FileType.EDUCATION_CERTIFICATE,
+                                           FileOwnerType.USER)
 
     session.add(consent_file_model)
     session.add(education_file_model)
@@ -146,7 +156,9 @@ async def register(
             selectinload(User.files).selectinload(FileModel.file_type),
             selectinload(User.files).selectinload(FileModel.owner_type),
             selectinload(User.participant_info),
-            selectinload(User.user2roles).selectinload(User2Roles.role)
+            selectinload(User.user2roles).selectinload(User2Roles.role),
+            selectinload(User.current_status),
+            selectinload(User.status_history).selectinload(UserStatusHistory.status),
         )
         .where(User.id == user.id)
     )
@@ -186,15 +198,21 @@ async def register_mentor(
             detail="Email уже зарегистрирован"
         )
 
-    # Создание пользователя
     user = User(
         id=uuid.uuid4(),
         email=mentor_data.email,
         password=get_password_hash(mentor_data.password),
         full_name=mentor_data.full_name,
+        current_status_id=user_router_state.pending_status_id,
     )
 
-    # Создание информации о менторе
+    status_history = UserStatusHistory(
+        id=uuid.uuid4(),
+        user_id=user.id,
+        status_id=user_router_state.pending_status_id,
+        comment="Начальный статус при регистрации ментора"
+    )
+
     mentor_info = MentorInfo(
         id=uuid.uuid4(),
         user_id=user.id,
@@ -210,6 +228,7 @@ async def register_mentor(
     )
 
     session.add(user)
+    session.add(status_history)
     session.add(mentor_info)
     session.add(role)
 
@@ -229,7 +248,9 @@ async def register_mentor(
             selectinload(User.files).selectinload(FileModel.file_type),
             selectinload(User.files).selectinload(FileModel.owner_type),
             selectinload(User.mentor_info),
-            selectinload(User.user2roles).selectinload(User2Roles.role)
+            selectinload(User.user2roles).selectinload(User2Roles.role),
+            selectinload(User.current_status),
+            selectinload(User.status_history).selectinload(UserStatusHistory.status),
         )
         .where(User.id == user.id)
     )
@@ -270,6 +291,8 @@ async def read_users_me(
             selectinload(User.participant_info),
             selectinload(User.mentor_info),
             selectinload(User.user2roles).selectinload(User2Roles.role),
+            selectinload(User.current_status),
+            selectinload(User.status_history).selectinload(UserStatusHistory.status),
         )
         .where(User.id == current_user.id)
     )

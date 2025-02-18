@@ -16,6 +16,7 @@ class User(Base):
     password = Column(String(512), nullable=False)
     full_name = Column(String(255), nullable=False, index=True)
     registered_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+    current_status_id = Column(UUID(as_uuid=True), ForeignKey('user_status_types.id'), nullable=False)
 
     # Relationships
     user2roles = relationship("User2Roles", back_populates="user")
@@ -24,10 +25,36 @@ class User(Base):
     files = relationship("File", back_populates="user", cascade="all, delete-orphan")
     participant_info = relationship("ParticipantInfo", back_populates="user", uselist=False)
     mentor_info = relationship("MentorInfo", back_populates="user", uselist=False)
+    current_status = relationship("UserStatusType")
+    status_history = relationship("UserStatusHistory", back_populates="user", order_by="UserStatusHistory.created_at.desc()")
 
     @property
     def roles(self):
         return [user2role.role for user2role in self.user2roles]
+
+
+class UserStatusType(Base):
+    """Справочник статусов пользователя"""
+    __tablename__ = 'user_status_types'
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name = Column(String(50), nullable=False, unique=True)
+    description = Column(String(255), nullable=True)
+
+
+class UserStatusHistory(Base):
+    """История статусов пользователя"""
+    __tablename__ = 'user_status_history'
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey('users.id'), nullable=False)
+    status_id = Column(UUID(as_uuid=True), ForeignKey('user_status_types.id'), nullable=False)
+    comment = Column(String(512), nullable=True)  # Комментарий к смене статуса
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+
+    # Relationships
+    user = relationship("User", back_populates="status_history")
+    status = relationship("UserStatusType")
 
 
 class ParticipantInfo(Base):

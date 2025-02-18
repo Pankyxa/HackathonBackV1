@@ -40,6 +40,16 @@ class Token(BaseModel):
     token_type: str
 
 
+class UserStatusResponse(BaseModel):
+    """Схема ответа для статуса пользователя"""
+    id: UUID
+    name: str
+    description: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
 class UserResponse(BaseModel):
     id: UUID
     email: str
@@ -48,6 +58,8 @@ class UserResponse(BaseModel):
     participant_info: Optional[ParticipantInfoResponse] = None
     mentor_info: Optional[MentorInfoResponse] = None
     roles: List[RoleResponse] = []
+    current_status: UserStatusResponse
+    status_history: List["UserStatusHistoryResponse"] = []
 
     class Config:
         from_attributes = True
@@ -55,3 +67,13 @@ class UserResponse(BaseModel):
 
 class UserResponseRegister(UserResponse):
     files: List[FileResponse] = []
+
+
+class UserStatusHistoryResponse(BaseModel):
+    id: UUID
+    status: UserStatusResponse
+    comment: Optional[str]
+    created_at: datetime.datetime
+
+    class Config:
+        from_attributes = True
