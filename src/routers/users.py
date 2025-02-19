@@ -88,3 +88,51 @@ async def search_users(
     users = result.scalars().all()
 
     return users
+
+@router.get("/search/mentors", response_model=List[UserResponse])
+async def search_mentors(
+        query: str = Query(..., min_length=2, description="Search query for mentor full name"),
+        limit: int = Query(default=10, le=50, description="Number of results to return"),
+        offset: int = Query(default=0, description="Number of results to skip"),
+        current_user: User = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session)
+):
+    """
+    Поиск менторов по ФИО с пагинацией.
+    В отличие от поиска обычных пользователей:
+    - Ищет только пользователей с ролью ментора
+    - Может возвращать менторов, которые уже состоят в других командах
+    """
+    search_query = f"%{query}%"
+
+    stmt = (
+        select(User)
+        .options(
+            selectinload(User.participant_info),
+            selectinload(User.mentor_info),
+            selectinload(User.user2roles).selectinload(User2Roles.role),
+            selectinload(User.current_status),
+            selectinload(User.status_history).selectinload(UserStatusHistory.status),
+        )
+        .where(
+            and_(
+                User.full_name.ilike(search_query),
+                User.id != current_user.id,
+                exists(
+                    select(1)
+                    .where(
+                        User2Roles.user_id == User.id,
+                        User2Roles.role_id == user_router_state.mentor_role_id
+                    )
+                )
+            )
+        )
+        .limit(limit)
+        .offset(offset)
+        .order_by(User.full_name)
+    )
+
+    result = await session.execute(stmt)
+    mentors = result.scalars().all()
+
+    return mentors
