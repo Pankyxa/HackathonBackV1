@@ -71,7 +71,7 @@ class Team(Base):
         if not self.mentor or not self.team_leader_member:
             return "incomplete"
 
-        if not self.regular_members:
+        if not self.regular_members.count == 4:
             return "incomplete"
 
         all_approved = True
@@ -112,13 +112,13 @@ class Team(Base):
         Проверка возможности участия команды в мероприятиях
         Условия:
         - Все участники, лидер и наставник подтверждены (статус active)
-        - Минимум 4 обычных участника
+        - Есть 4 обычных участника
         - Есть лидер команды
         - Есть наставник
         """
         return (
                 self.status == "active" and
-                len(self.regular_members) >= 4 and
+                len(self.regular_members) == 4 and
                 self.team_leader_member is not None and
                 self.mentor is not None
         )

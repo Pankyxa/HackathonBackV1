@@ -21,7 +21,7 @@ from src.schemas.team import TeamCreate, TeamResponse, TeamMemberResponse, TeamM
     TeamMembersResponse, TeamMemberDetailResponse, TeamStatusDetails
 from src.auth.jwt import get_current_user
 from src.routers.auth import save_file
-from src.utils.router_states import team_router_state
+from src.utils.router_states import team_router_state, user_router_state
 
 router = APIRouter(prefix="/teams", tags=["teams"])
 
@@ -155,6 +155,125 @@ async def create_team(
         logo_file_id=team.logo_file_id,
         status_details=TeamStatusDetails(**team.get_status_details())
     )
+
+
+@router.post("/{team_id}/mentor", response_model=TeamMemberResponse)
+async def invite_team_mentor(
+        team_id: uuid.UUID,
+        mentor_id: UUID,
+        current_user: User = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session)
+):
+    """Пригласить ментора в команду"""
+    # Проверяем существование команды и права доступа
+    team_query = (
+        select(Team)
+        .options(
+            selectinload(Team.members)
+            .selectinload(TeamMember.user)
+            .selectinload(User.current_status),
+            selectinload(Team.members)
+            .selectinload(TeamMember.role),
+            selectinload(Team.members)
+            .selectinload(TeamMember.status)
+        )
+        .where(Team.id == team_id)
+    )
+    team = await session.execute(team_query)
+    team = team.scalar_one_or_none()
+
+    if not team:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Команда не найдена"
+        )
+
+    if team.team_leader_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Только лидер команды может приглашать ментора"
+        )
+
+    mentor_query = (
+        select(User)
+        .options(
+            selectinload(User.user2roles)
+            .selectinload(User2Roles.role)
+        )
+        .where(User.id == mentor_id)
+    )
+    mentor = await session.execute(mentor_query)
+    mentor = mentor.scalar_one_or_none()
+
+    if not mentor:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Пользователь не найден"
+        )
+
+    # Проверяем, что пользователь является ментором
+    is_mentor = any(
+        user2role.role_id == user_router_state.mentor_role_id
+        for user2role in mentor.user2roles
+    )
+    if not is_mentor:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Пользователь не является ментором"
+        )
+
+    # Проверяем, есть ли уже ментор в команде
+    existing_mentor_query = (
+        select(TeamMember)
+        .where(
+            TeamMember.team_id == team_id,
+            TeamMember.role_id == team_router_state.mentor_role_id,
+            TeamMember.status_id == team_router_state.accepted_status_id
+        )
+    )
+    existing_mentor = await session.execute(existing_mentor_query)
+    if existing_mentor.scalar_one_or_none():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="В команде уже есть ментор"
+        )
+
+    # Проверяем, нет ли уже приглашения этому ментору
+    existing_invitation_query = (
+        select(TeamMember)
+        .where(
+            TeamMember.team_id == team_id,
+            TeamMember.user_id == mentor_id
+        )
+    )
+    existing_invitation = await session.execute(existing_invitation_query)
+    existing_invitation = existing_invitation.scalar_one_or_none()
+
+    if existing_invitation:
+        if existing_invitation.status_id == team_router_state.pending_status_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Приглашение уже отправлено"
+            )
+        elif existing_invitation.status_id == team_router_state.accepted_status_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Ментор уже является участником команды"
+            )
+
+    # Создаем приглашение для ментора
+    team_member = TeamMember(
+        id=uuid.uuid4(),
+        team_id=team_id,
+        user_id=mentor_id,
+        role_id=team_router_state.mentor_role_id,
+        status_id=team_router_state.pending_status_id,
+    )
+    session.add(team_member)
+    await session.commit()
+    await session.refresh(team_member)
+
+    return team_member
 
 
 @router.post("/{team_id}/members", response_model=TeamMemberResponse)
@@ -381,13 +500,13 @@ async def get_team(
         )
 
     return TeamResponse(
-            id=team.id,
-            team_name=team.team_name,
-            team_motto=team.team_motto,
-            team_leader_id=team.team_leader_id,
-            logo_file_id=team.logo_file_id,
-            status_details=TeamStatusDetails(**team.get_status_details())
-        )
+        id=team.id,
+        team_name=team.team_name,
+        team_motto=team.team_motto,
+        team_leader_id=team.team_leader_id,
+        logo_file_id=team.logo_file_id,
+        status_details=TeamStatusDetails(**team.get_status_details())
+    )
 
 
 @router.get("/my/team", response_model=TeamResponse)
@@ -435,13 +554,13 @@ async def get_my_team(
         )
 
     return TeamResponse(
-            id=team.id,
-            team_name=team.team_name,
-            team_motto=team.team_motto,
-            team_leader_id=team.team_leader_id,
-            logo_file_id=team.logo_file_id,
-            status_details=TeamStatusDetails(**team.get_status_details())
-        )
+        id=team.id,
+        team_name=team.team_name,
+        team_motto=team.team_motto,
+        team_leader_id=team.team_leader_id,
+        logo_file_id=team.logo_file_id,
+        status_details=TeamStatusDetails(**team.get_status_details())
+    )
 
 
 @router.get("/{team_id}/logo")
