@@ -49,7 +49,7 @@ class UserStatusHistory(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), ForeignKey('users.id'), nullable=False)
     status_id = Column(UUID(as_uuid=True), ForeignKey('user_status_types.id'), nullable=False)
-    comment = Column(String(512), nullable=True)  # Комментарий к смене статуса
+    comment = Column(String(512), nullable=True)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
 
     # Relationships

@@ -189,7 +189,6 @@ async def register_mentor(
         job_title=job_title
     )
 
-    # Проверка существования email
     query = select(User).where(User.email == mentor_data.email)
     result = await session.execute(query)
     if result.scalar_one_or_none():

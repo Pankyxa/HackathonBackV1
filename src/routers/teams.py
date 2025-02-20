@@ -165,7 +165,6 @@ async def invite_team_mentor(
         session: AsyncSession = Depends(get_session)
 ):
     """Пригласить ментора в команду"""
-    # Проверяем существование команды и права доступа
     team_query = (
         select(Team)
         .options(
@@ -211,7 +210,6 @@ async def invite_team_mentor(
             detail="Пользователь не найден"
         )
 
-    # Проверяем, что пользователь является ментором
     is_mentor = any(
         user2role.role_id == user_router_state.mentor_role_id
         for user2role in mentor.user2roles
@@ -222,7 +220,6 @@ async def invite_team_mentor(
             detail="Пользователь не является ментором"
         )
 
-    # Проверяем, есть ли уже ментор в команде
     existing_mentor_query = (
         select(TeamMember)
         .where(
@@ -238,7 +235,6 @@ async def invite_team_mentor(
             detail="В команде уже есть ментор"
         )
 
-    # Проверяем, нет ли уже приглашения этому ментору
     existing_invitation_query = (
         select(TeamMember)
         .where(
@@ -261,7 +257,6 @@ async def invite_team_mentor(
                 detail="Ментор уже является участником команды"
             )
 
-    # Создаем приглашение для ментора
     team_member = TeamMember(
         id=uuid.uuid4(),
         team_id=team_id,

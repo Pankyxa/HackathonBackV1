@@ -52,12 +52,10 @@ class FileResponse(FileBase):
     file_path: str
     created_at: datetime
 
-    # Связанные данные
     file_format: FileFormatResponse
     file_type: FileTypeResponse
     owner_type: FileOwnerTypeResponse
 
-    # ID владельцев
     user_id: Optional[UUID] = None
     team_id: Optional[UUID] = None
 
