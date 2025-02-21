@@ -146,14 +146,31 @@ async def create_team(
             session.add_all(team_members)
 
     await session.commit()
-    await session.refresh(team)
+
+    # Загружаем все необходимые данные для формирования ответа
+    team_query = (
+        select(Team)
+        .options(
+            selectinload(Team.members)
+            .selectinload(TeamMember.user)
+            .selectinload(User.current_status),
+            selectinload(Team.members)
+            .selectinload(TeamMember.role),
+            selectinload(Team.members)
+            .selectinload(TeamMember.status)
+        )
+        .where(Team.id == team.id)
+    )
+    result = await session.execute(team_query)
+    team_with_relations = result.scalar_one()
+
     return TeamResponse(
-        id=team.id,
-        team_name=team.team_name,
-        team_motto=team.team_motto,
-        team_leader_id=team.team_leader_id,
-        logo_file_id=team.logo_file_id,
-        status_details=TeamStatusDetails(**team.get_status_details())
+        id=team_with_relations.id,
+        team_name=team_with_relations.team_name,
+        team_motto=team_with_relations.team_motto,
+        team_leader_id=team_with_relations.team_leader_id,
+        logo_file_id=team_with_relations.logo_file_id,
+        status_details=TeamStatusDetails(**team_with_relations.get_status_details())
     )
 
 

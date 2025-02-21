@@ -10,6 +10,18 @@ from src.db import Base
 from . import File, TeamMemberStatus, UserStatus, TeamRole
 
 
+from datetime import datetime
+from typing import List, Optional
+
+from sqlalchemy import Column, String, ForeignKey, DateTime
+from sqlalchemy.orm import relationship
+from sqlalchemy.dialects.postgresql import UUID
+import uuid
+
+from src.db import Base
+from . import File, TeamMemberStatus, UserStatus, TeamRole
+
+
 class Team(Base):
     """Модель команды"""
     __tablename__ = 'teams'
@@ -26,52 +38,47 @@ class Team(Base):
     logo = relationship("File", foreign_keys=[logo_file_id])
     files = relationship("File", back_populates="team", foreign_keys=[File.team_id])
 
-    @property
-    def active_members(self) -> List["TeamMember"]:
+    def get_active_members(self) -> List["TeamMember"]:
         """Получение списка принятых участников команды"""
         return [
             member for member in self.members
             if member.status.name == TeamMemberStatus.ACCEPTED.value
         ]
 
-    @property
-    def mentor(self) -> Optional["TeamMember"]:
+    def get_mentor(self) -> Optional["TeamMember"]:
         """Получение наставника команды"""
-        for member in self.active_members:
+        active_members = self.get_active_members()
+        for member in active_members:
             if member.role.name == TeamRole.MENTOR.value:
                 return member
         return None
 
-    @property
-    def team_leader_member(self) -> Optional["TeamMember"]:
+    def get_team_leader_member(self) -> Optional["TeamMember"]:
         """Получение тимлида как участника команды"""
-        for member in self.active_members:
+        active_members = self.get_active_members()
+        for member in active_members:
             if member.role.name == TeamRole.TEAMLEAD.value:
                 return member
         return None
 
-    @property
-    def regular_members(self) -> List["TeamMember"]:
+    def get_regular_members(self) -> List["TeamMember"]:
         """Получение обычных участников команды (не тимлид и не наставник)"""
+        active_members = self.get_active_members()
         return [
-            member for member in self.active_members
+            member for member in active_members
             if member.role.name == TeamRole.MEMBER.value
         ]
 
-    @property
-    def status(self) -> str:
-        """
-        Вычисляемый статус команды на основе статусов участников
-        Возможные статусы:
-        - incomplete: команда без участников, без лидера или без наставника
-        - pending: есть участники, ожидающие подтверждения документов
-        - needs_update: есть участники, которым нужно обновить документы
-        - active: все участники подтверждены
-        """
-        if not self.mentor or not self.team_leader_member:
+    def get_status(self) -> str:
+        """Вычисляемый статус команды"""
+        mentor = self.get_mentor()
+        team_leader = self.get_team_leader_member()
+        regular_members = self.get_regular_members()
+
+        if not mentor or not team_leader:
             return "incomplete"
 
-        if not self.regular_members.count == 4:
+        if len(regular_members) != 4:
             return "incomplete"
 
         all_approved = True
@@ -90,11 +97,9 @@ class Team(Base):
             elif status != UserStatus.APPROVED.value:
                 all_approved = False
 
-        check_user_status(self.mentor.user)
-
-        check_user_status(self.team_leader_member.user)
-
-        for member in self.regular_members:
+        check_user_status(mentor.user)
+        check_user_status(team_leader.user)
+        for member in regular_members:
             check_user_status(member.user)
 
         if all_approved:
@@ -106,35 +111,25 @@ class Team(Base):
 
         return "invalid"
 
-    @property
     def can_participate(self) -> bool:
-        """
-        Проверка возможности участия команды в мероприятиях
-        Условия:
-        - Все участники, лидер и наставник подтверждены (статус active)
-        - Есть 4 обычных участника
-        - Есть лидер команды
-        - Есть наставник
-        """
+        """Проверка возможности участия команды"""
         return (
-                self.status == "active" and
-                len(self.regular_members) == 4 and
-                self.team_leader_member is not None and
-                self.mentor is not None
+            self.get_status() == "active" and
+            len(self.get_regular_members()) == 4 and
+            self.get_team_leader_member() is not None and
+            self.get_mentor() is not None
         )
 
     def get_status_details(self) -> dict:
-        """
-        Получение детальной информации о статусе команды
-        """
-        mentor = self.mentor
-        team_leader = self.team_leader_member
-        regular_members = self.regular_members
+        """Получение детальной информации о статусе команды"""
+        mentor = self.get_mentor()
+        team_leader = self.get_team_leader_member()
+        regular_members = self.get_regular_members()
 
         return {
-            "status": self.status,
-            "can_participate": self.can_participate,
-            "total_members": len(self.active_members),
+            "status": self.get_status(),
+            "can_participate": self.can_participate(),
+            "total_members": len(self.get_active_members()),
             "regular_members_count": len(regular_members),
             "has_mentor": mentor is not None,
             "mentor_status": mentor.user.current_status.name if mentor else None,
@@ -142,11 +137,11 @@ class Team(Base):
             "team_leader_status": team_leader.user.current_status.name if team_leader else None,
             "members_status": {
                 "approved": sum(1 for m in regular_members
-                                if m.user.current_status.name == UserStatus.APPROVED.value),
+                              if m.user.current_status.name == UserStatus.APPROVED.value),
                 "pending": sum(1 for m in regular_members
-                               if m.user.current_status.name == UserStatus.PENDING.value),
+                             if m.user.current_status.name == UserStatus.PENDING.value),
                 "need_update": sum(1 for m in regular_members
-                                   if m.user.current_status.name == UserStatus.NEED_UPDATE.value)
+                                 if m.user.current_status.name == UserStatus.NEED_UPDATE.value)
             }
         }
 
