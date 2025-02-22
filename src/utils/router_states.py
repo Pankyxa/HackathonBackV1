@@ -1,4 +1,3 @@
-# src/utils/router_states.py
 from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.models.enums import (

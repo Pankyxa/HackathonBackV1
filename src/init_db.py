@@ -44,8 +44,9 @@ async def init_models(engine: AsyncEngine):
         roles_data = [
             {"name": "participant", "description": "Участник проекта"},
             {"name": "mentor", "description": "Наставник команды"},
-            {"name": "jury", "description": "Член жюри"},
-            {"name": "admin", "description": "Администратор системы"}
+            {"name": "judge", "description": "Член жюри"},
+            {"name": "admin", "description": "Администратор системы"},
+            {"name": "organizer", "description": "Организатор"}
         ]
 
         for role_data in roles_data:

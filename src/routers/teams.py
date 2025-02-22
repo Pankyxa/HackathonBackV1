@@ -147,7 +147,6 @@ async def create_team(
 
     await session.commit()
 
-    # Загружаем все необходимые данные для формирования ответа
     team_query = (
         select(Team)
         .options(
@@ -558,6 +557,139 @@ async def get_my_team(
     )
     team = await session.execute(team_query)
     team = team.scalar_one_or_none()
+
+    if not team:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Команда не найдена"
+        )
+
+    return TeamResponse(
+        id=team.id,
+        team_name=team.team_name,
+        team_motto=team.team_motto,
+        team_leader_id=team.team_leader_id,
+        logo_file_id=team.logo_file_id,
+        status_details=TeamStatusDetails(**team.get_status_details())
+    )
+
+
+@router.get("/mentor/teams", response_model=List[TeamResponse])
+async def get_mentor_teams(
+        current_user: User = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session)
+):
+    """Получить список всех команд, где пользователь является ментором"""
+    user_roles_query = (
+        select(User2Roles)
+        .where(User2Roles.user_id == current_user.id)
+    )
+    user_roles = await session.execute(user_roles_query)
+    user_roles = user_roles.scalars().all()
+
+    is_mentor = any(
+        role.role_id == user_router_state.mentor_role_id
+        for role in user_roles
+    )
+
+    if not is_mentor:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Доступ разрешен только для менторов"
+        )
+
+    teams_query = (
+        select(Team)
+        .options(
+            selectinload(Team.members)
+            .selectinload(TeamMember.user)
+            .selectinload(User.current_status),
+            selectinload(Team.members)
+            .selectinload(TeamMember.role),
+            selectinload(Team.members)
+            .selectinload(TeamMember.status)
+        )
+        .where(
+            exists(
+                select(1).where(
+                    TeamMember.team_id == Team.id,
+                    TeamMember.user_id == current_user.id,
+                    TeamMember.role_id == team_router_state.mentor_role_id,
+                    TeamMember.status_id == team_router_state.accepted_status_id
+                )
+            ))
+    )
+
+    result = await session.execute(teams_query)
+    teams = result.scalars().all()
+
+    return [
+        TeamResponse(
+            id=team.id,
+            team_name=team.team_name,
+            team_motto=team.team_motto,
+            team_leader_id=team.team_leader_id,
+            logo_file_id=team.logo_file_id,
+            status_details=TeamStatusDetails(**team.get_status_details())
+        )
+        for team in teams
+    ]
+
+
+@router.get("/mentor/teams/{team_id}", response_model=TeamResponse)
+async def get_mentor_team(
+        team_id: UUID,
+        current_user: User = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session)
+):
+    """Получить информацию о конкретной команде ментора"""
+    user_roles_query = (
+        select(User2Roles)
+        .where(User2Roles.user_id == current_user.id)
+    )
+    user_roles = await session.execute(user_roles_query)
+    user_roles = user_roles.scalars().all()
+
+    is_mentor = any(
+        role.role_id == user_router_state.mentor_role_id
+        for role in user_roles
+    )
+
+    if not is_mentor:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Доступ разрешен только для менторов"
+        )
+
+    mentor_check_query = select(TeamMember).where(
+        TeamMember.team_id == team_id,
+        TeamMember.user_id == current_user.id,
+        TeamMember.role_id == team_router_state.mentor_role_id,
+        TeamMember.status_id == team_router_state.accepted_status_id
+    )
+    mentor_check = await session.execute(mentor_check_query)
+    if not mentor_check.scalar_one_or_none():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="У вас нет доступа к информации об этой команде"
+        )
+
+    team_query = (
+        select(Team)
+        .options(
+            selectinload(Team.members)
+            .selectinload(TeamMember.user)
+            .selectinload(User.current_status),
+            selectinload(Team.members)
+            .selectinload(TeamMember.role),
+            selectinload(Team.members)
+            .selectinload(TeamMember.status)
+        )
+        .where(Team.id == team_id)
+    )
+
+    result = await session.execute(team_query)
+    team = result.scalar_one_or_none()
 
     if not team:
         raise HTTPException(
