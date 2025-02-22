@@ -65,7 +65,7 @@ class UserRouterState:
     def __init__(self):
         self.participant_role_id: UUID = None
         self.mentor_role_id: UUID = None
-        self.jury_role_id: UUID = None
+        self.judge_role_id: UUID = None
         self.admin_role_id: UUID = None
         self.pending_status_id: UUID = None
         self.approved_status_id: UUID = None
@@ -76,7 +76,7 @@ class UserRouterState:
         enum_data = get_enum_data()
         self.participant_role_id = enum_data.get_user_role_id(UserRole.PARTICIPANT)
         self.mentor_role_id = enum_data.get_user_role_id(UserRole.MENTOR)
-        self.jury_role_id = enum_data.get_user_role_id(UserRole.JURY)
+        self.judge_role_id = enum_data.get_user_role_id(UserRole.JUDGE)
         self.admin_role_id = enum_data.get_user_role_id(UserRole.ADMIN)
         self.pending_status_id = enum_data.get_user_status_id(UserStatus.PENDING)
         self.approved_status_id = enum_data.get_user_status_id(UserStatus.APPROVED)
