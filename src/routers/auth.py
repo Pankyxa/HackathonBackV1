@@ -259,6 +259,63 @@ async def register_mentor(
     return user_with_data
 
 
+@router.post("/register/special", response_model=UserResponseRegister)
+async def register_special(
+        email: str = Form(...),
+        password: str = Form(...),
+        full_name: str = Form(...),
+        session: AsyncSession = Depends(get_session)
+):
+    query = select(User).where(User.email == email)
+    result = await session.execute(query)
+    if result.scalar_one_or_none():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email уже зарегистрирован"
+        )
+
+    user = User(
+        id=uuid.uuid4(),
+        email=email,
+        password=get_password_hash(password),
+        full_name=full_name,
+        current_status_id=user_router_state.pending_status_id,
+    )
+
+    status_history = UserStatusHistory(
+        id=uuid.uuid4(),
+        user_id=user.id,
+        status_id=user_router_state.pending_status_id,
+        comment="Начальный статус при регистрации специального пользователя"
+    )
+
+    session.add(user)
+    session.add(status_history)
+
+    await session.commit()
+    await session.refresh(user)
+
+    query = (
+        select(User)
+        .options(
+            selectinload(User.files).selectinload(FileModel.file_format),
+            selectinload(User.files).selectinload(FileModel.file_type),
+            selectinload(User.files).selectinload(FileModel.owner_type),
+            selectinload(User.user2roles).selectinload(User2Roles.role),
+            selectinload(User.current_status),
+            selectinload(User.status_history).selectinload(UserStatusHistory.status),
+        )
+        .where(User.id == user.id)
+    )
+    result = await session.execute(query)
+    user_with_data = result.scalar_one()
+
+    user_with_data.participant_info = None
+    user_with_data.mentor_info = None
+
+    return user_with_data
+
+
 @router.post("/login", response_model=Token)
 async def login(user_data: UserLogin, session: AsyncSession = Depends(get_session)):
     query = select(User).where(User.email == user_data.email)
