@@ -3,6 +3,7 @@ from typing import Optional, List
 from uuid import UUID
 from pydantic import BaseModel, EmailStr
 
+from src.models import UserStatus
 from src.schemas.enum_tables import RoleResponse
 from src.schemas.file import FileResponse
 from src.schemas.mentor_info import MentorInfoResponse
@@ -81,3 +82,7 @@ class UserStatusHistoryResponse(BaseModel):
 class PaginatedUserResponse(BaseModel):
     users: List[UserResponse]
     total: int
+
+class ChangeUserStatusRequest(BaseModel):
+    status: UserStatus
+    comment: Optional[str] = None

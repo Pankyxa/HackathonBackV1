@@ -10,10 +10,10 @@ from starlette import status
 
 from src.auth.jwt import get_current_user
 from src.db import get_session
-from src.models import User, TeamMember, File as FileModel
-from src.models.user import User2Roles, UserStatusHistory
+from src.models import User, TeamMember, File as FileModel, UserStatus
+from src.models.user import User2Roles, UserStatusHistory, UserStatusType
 from src.schemas.file import FileResponse
-from src.schemas.user import UserResponse, PaginatedUserResponse
+from src.schemas.user import UserResponse, PaginatedUserResponse, ChangeUserStatusRequest
 from src.utils.router_states import team_router_state, user_router_state, file_router_state
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -287,3 +287,82 @@ async def get_user_documents(
     documents = result.scalars().all()
 
     return documents
+
+
+@router.put("/{user_id}/status", response_model=UserResponse)
+async def change_user_status(
+        user_id: uuid.UUID,
+        status_request: ChangeUserStatusRequest,
+        current_user: User = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session)
+):
+    """
+    Изменение статуса пользователя (доступно только для организаторов)
+    """
+    current_user_query = (
+        select(User)
+        .options(selectinload(User.user2roles))
+        .where(User.id == current_user.id)
+    )
+    result = await session.execute(current_user_query)
+    current_user_with_roles = result.scalar_one()
+
+    is_organizer = any(
+        role.role_id == user_router_state.organizer_role_id
+        for role in current_user_with_roles.user2roles
+    )
+
+    if not is_organizer:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Только организаторы могут изменять статус пользователей"
+        )
+
+    user_query = (
+        select(User)
+        .options(
+            selectinload(User.participant_info),
+            selectinload(User.mentor_info),
+            selectinload(User.user2roles).selectinload(User2Roles.role),
+            selectinload(User.current_status),
+            selectinload(User.status_history).selectinload(UserStatusHistory.status),
+        )
+        .where(User.id == user_id)
+    )
+
+    result = await session.execute(user_query)
+    user = result.scalar_one_or_none()
+
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Пользователь не найден"
+        )
+
+    status_id = None
+    if status_request.status == UserStatus.PENDING:
+        status_id = user_router_state.pending_status_id
+    elif status_request.status == UserStatus.APPROVED:
+        status_id = user_router_state.approved_status_id
+    elif status_request.status == UserStatus.NEED_UPDATE:
+        status_id = user_router_state.need_update_status_id
+
+    if not status_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Неверный статус"
+        )
+
+    new_status_history = UserStatusHistory(
+        user_id=user.id,
+        status_id=status_id,
+        comment=status_request.comment
+    )
+    session.add(new_status_history)
+
+    user.current_status_id = status_id
+
+    await session.commit()
+    await session.refresh(user)
+
+    return user
