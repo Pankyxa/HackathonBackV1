@@ -9,7 +9,7 @@ import aiofiles
 
 from src.auth.utils import verify_password, get_password_hash
 from src.db import get_session
-from src.models import User, FileFormat, FileType, FileOwnerType, File as FileModel, ParticipantInfo, Role
+from src.models import User, FileType, FileOwnerType, File as FileModel, ParticipantInfo
 from src.models.user import User2Roles, MentorInfo, UserStatusHistory
 from src.schemas.user import UserCreate, UserLogin, Token, UserResponse, UserResponseRegister, MentorCreate
 from src.auth.jwt import create_access_token, get_current_user
@@ -279,14 +279,14 @@ async def register_special(
         email=email,
         password=get_password_hash(password),
         full_name=full_name,
-        current_status_id=user_router_state.pending_status_id,
+        current_status_id=user_router_state.approved_status_id,
     )
 
     status_history = UserStatusHistory(
         id=uuid.uuid4(),
         user_id=user.id,
-        status_id=user_router_state.pending_status_id,
-        comment="Начальный статус при регистрации специального пользователя"
+        status_id=user_router_state.approved_status_id,
+        comment="Начальный статус при регистрации специального пользователя - подтвержден"
     )
 
     session.add(user)

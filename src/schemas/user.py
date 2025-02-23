@@ -77,3 +77,7 @@ class UserStatusHistoryResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+class PaginatedUserResponse(BaseModel):
+    users: List[UserResponse]
+    total: int

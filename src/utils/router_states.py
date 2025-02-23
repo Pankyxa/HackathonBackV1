@@ -67,6 +67,7 @@ class UserRouterState:
         self.mentor_role_id: UUID = None
         self.judge_role_id: UUID = None
         self.admin_role_id: UUID = None
+        self.organizer_role_id: UUID = None
         self.pending_status_id: UUID = None
         self.approved_status_id: UUID = None
         self.need_update_status_id: UUID = None
@@ -78,6 +79,7 @@ class UserRouterState:
         self.mentor_role_id = enum_data.get_user_role_id(UserRole.MENTOR)
         self.judge_role_id = enum_data.get_user_role_id(UserRole.JUDGE)
         self.admin_role_id = enum_data.get_user_role_id(UserRole.ADMIN)
+        self.organizer_role_id = enum_data.get_user_role_id(UserRole.ORGANIZER)
         self.pending_status_id = enum_data.get_user_status_id(UserStatus.PENDING)
         self.approved_status_id = enum_data.get_user_status_id(UserStatus.APPROVED)
         self.need_update_status_id = enum_data.get_user_status_id(UserStatus.NEED_UPDATE)
