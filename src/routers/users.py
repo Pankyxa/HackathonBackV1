@@ -2,7 +2,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, or_, and_, not_, exists, func
+from sqlalchemy import select, or_, and_, not_, exists, func, delete
 from sqlalchemy.orm import selectinload
 from typing import List, Optional
 
@@ -13,7 +13,7 @@ from src.db import get_session
 from src.models import User, TeamMember, File as FileModel, UserStatus
 from src.models.user import User2Roles, UserStatusHistory, UserStatusType
 from src.schemas.file import FileResponse
-from src.schemas.user import UserResponse, PaginatedUserResponse, ChangeUserStatusRequest
+from src.schemas.user import UserResponse, PaginatedUserResponse, ChangeUserStatusRequest, UpdateUserRolesRequest
 from src.utils.router_states import team_router_state, user_router_state, file_router_state
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -143,17 +143,23 @@ async def search_mentors(
     return mentors
 
 
-@router.get("/", response_model=List[UserResponse])
+@router.get("/", response_model=PaginatedUserResponse)
 async def get_users(
         limit: int = Query(default=10, le=50, description="Number of results to return"),
         offset: int = Query(default=0, description="Number of results to skip"),
         search: Optional[str] = Query(None, min_length=2,
-                                      description="Optional search query for user full name or email"),
+                                    description="Optional search query for user full name or email"),
+        roles: Optional[List[str]] = Query(None, description="Filter by user roles. Use '-' to find users without roles"),
+        statuses: Optional[List[UserStatus]] = Query(None, description="Filter by user statuses"),
         current_user: User = Depends(get_current_user),
         session: AsyncSession = Depends(get_session)
 ):
     """
-    Получение списка всех пользователей с пагинацией и опциональной фильтрацией по ФИО или email.
+    Получение списка всех пользователей с пагинацией и фильтрацией.
+    Поддерживает:
+    - Поиск по ФИО или email
+    - Фильтрацию по ролям (используйте '-' для поиска пользователей без ролей)
+    - Фильтрацию по статусам
     """
     query = select(User).options(
         selectinload(User.participant_info),
@@ -172,6 +178,54 @@ async def get_users(
             )
         )
 
+    if roles:
+        if "-" in roles:
+            query = query.where(
+                not_(
+                    exists(
+                        select(1)
+                        .where(User2Roles.user_id == User.id)
+                    )
+                )
+            )
+            roles = [role for role in roles if role != "-"]
+
+        if roles:
+            role_ids = []
+            for role_name in roles:
+                role_id = getattr(user_router_state, f"{role_name}_role_id", None)
+                if role_id is not None:
+                    role_ids.append(role_id)
+
+            if role_ids:
+                query = query.where(
+                    exists(
+                        select(1)
+                        .where(
+                            and_(
+                                User2Roles.user_id == User.id,
+                                User2Roles.role_id.in_(role_ids)
+                            )
+                        )
+                    )
+                )
+
+    if statuses:
+        status_ids = []
+        for status in statuses:
+            if status == UserStatus.PENDING:
+                status_ids.append(user_router_state.pending_status_id)
+            elif status == UserStatus.APPROVED:
+                status_ids.append(user_router_state.approved_status_id)
+            elif status == UserStatus.NEED_UPDATE:
+                status_ids.append(user_router_state.need_update_status_id)
+
+        if status_ids:
+            query = query.where(User.current_status_id.in_(status_ids))
+
+    count_query = select(func.count()).select_from(query.subquery())
+    total = await session.scalar(count_query)
+
     query = query.order_by(User.full_name) \
         .limit(limit) \
         .offset(offset)
@@ -179,7 +233,10 @@ async def get_users(
     result = await session.execute(query)
     users = result.scalars().all()
 
-    return users
+    return {
+        "users": users,
+        "total": total
+    }
 
 
 @router.get("/pending", response_model=PaginatedUserResponse)
@@ -256,8 +313,12 @@ async def get_user_documents(
         role.role_id == user_router_state.organizer_role_id
         for role in current_user_with_roles.user2roles
     )
+    is_admin = any(
+        role.role_id == user_router_state.admin_role_id
+        for role in current_user_with_roles.user2roles
+    )
 
-    if current_user.id != user_id and not is_organizer:
+    if current_user.id != user_id and not (is_organizer or is_admin):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Недостаточно прав для просмотра документов"
@@ -366,3 +427,78 @@ async def change_user_status(
     await session.refresh(user)
 
     return user
+
+@router.put("/{user_id}/roles", response_model=UserResponse)
+async def update_user_roles(
+        user_id: uuid.UUID,
+        roles_request: UpdateUserRolesRequest,
+        current_user: User = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session)
+):
+    """
+    Обновление ролей пользователя (доступно только для администраторов)
+    """
+    current_user_query = (
+        select(User)
+        .options(selectinload(User.user2roles))
+        .where(User.id == current_user.id)
+    )
+    result = await session.execute(current_user_query)
+    current_user_with_roles = result.scalar_one()
+
+    is_admin = any(
+        role.role_id == user_router_state.admin_role_id
+        for role in current_user_with_roles.user2roles
+    )
+
+    if not is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Только администраторы могут изменять роли пользователей"
+        )
+
+    role_ids = set()
+    for role_name in roles_request.roles:
+        role_id = getattr(user_router_state, f"{role_name}_role_id", None)
+        if role_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Неверная роль: {role_name}"
+            )
+        role_ids.add(role_id)
+
+    await session.execute(
+        delete(User2Roles).where(User2Roles.user_id == user_id)
+    )
+
+    for role_id in role_ids:
+        new_role = User2Roles(
+            user_id=user_id,
+            role_id=role_id
+        )
+        session.add(new_role)
+
+    await session.commit()
+
+    user_query = (
+        select(User)
+        .options(
+            selectinload(User.participant_info),
+            selectinload(User.mentor_info),
+            selectinload(User.user2roles).selectinload(User2Roles.role),
+            selectinload(User.current_status),
+            selectinload(User.status_history).selectinload(UserStatusHistory.status),
+        )
+        .where(User.id == user_id)
+    )
+
+    result = await session.execute(user_query)
+    updated_user = result.scalar_one_or_none()
+
+    if not updated_user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Пользователь не найден"
+        )
+
+    return updated_user

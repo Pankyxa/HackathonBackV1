@@ -48,8 +48,12 @@ async def get_file(
         role.role_id == user_router_state.organizer_role_id
         for role in current_user_with_roles.user2roles
     )
+    is_admin = any(
+        role.role_id == user_router_state.admin_role_id
+        for role in current_user_with_roles.user2roles
+    )
 
-    if file.user_id != current_user.id and not is_organizer:
+    if file.user_id != current_user.id and not (is_organizer or is_admin):
         raise HTTPException(status_code=403, detail="Нет доступа к файлу")
 
     if not os.path.exists(file.file_path):

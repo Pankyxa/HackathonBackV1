@@ -86,3 +86,6 @@ class PaginatedUserResponse(BaseModel):
 class ChangeUserStatusRequest(BaseModel):
     status: UserStatus
     comment: Optional[str] = None
+
+class UpdateUserRolesRequest(BaseModel):
+    roles: List[str]
