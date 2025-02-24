@@ -89,3 +89,12 @@ class ChangeUserStatusRequest(BaseModel):
 
 class UpdateUserRolesRequest(BaseModel):
     roles: List[str]
+
+
+class UpdateUserDocumentsRequest(BaseModel):
+    """Схема для обновления документов пользователя"""
+    document_type: str  # 'consent' или 'certificate'
+
+    class Config:
+        arbitrary_types_allowed = True
+

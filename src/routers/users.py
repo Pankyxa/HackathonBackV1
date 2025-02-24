@@ -1,6 +1,8 @@
+import os
 import uuid
 
-from fastapi import APIRouter, Depends, Query, HTTPException
+from fastapi import APIRouter, Depends, Query, HTTPException, Form, UploadFile, File
+from pathlib import Path
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_, and_, not_, exists, func, delete
 from sqlalchemy.orm import selectinload
@@ -13,7 +15,8 @@ from src.db import get_session
 from src.models import User, TeamMember, File as FileModel, UserStatus
 from src.models.user import User2Roles, UserStatusHistory, UserStatusType
 from src.schemas.file import FileResponse
-from src.schemas.user import UserResponse, PaginatedUserResponse, ChangeUserStatusRequest, UpdateUserRolesRequest
+from src.schemas.user import UserResponse, PaginatedUserResponse, ChangeUserStatusRequest, UpdateUserRolesRequest, \
+    UpdateUserDocumentsRequest
 from src.utils.router_states import team_router_state, user_router_state, file_router_state
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -581,4 +584,150 @@ async def update_current_user(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Ошибка при обновлении данных пользователя"
+        )
+
+
+@router.put("/me/documents", response_model=UserResponse)
+async def update_user_documents(
+        document_type: str = Form(...),  # 'consent' или 'certificate'
+        file: UploadFile = File(...),
+        current_user: User = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session)
+):
+    """
+    Обновление документов текущего пользователя (согласие и справка с места учебы/работы).
+    Принимает файл и тип документа (consent или certificate).
+    """
+    if document_type not in ['consent', 'certificate']:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Неверный тип документа. Допустимые значения: consent, certificate"
+        )
+
+    file_type_id = None
+    if document_type == 'consent':
+        file_type_id = file_router_state.consent_type_id
+    else:
+        is_participant = any(
+            role.role_id == user_router_state.participant_role_id
+            for role in current_user.user2roles
+        )
+        file_type_id = (
+            file_router_state.education_certificate_type_id if is_participant
+            else file_router_state.job_certificate_type_id
+        )
+
+    file_extension = Path(file.filename).suffix.lower()
+    if file_extension not in ['.pdf', '.jpg', '.jpeg', '.png']:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Неподдерживаемый формат файла. Допустимые форматы: PDF, JPG, PNG"
+        )
+
+    file_format_id = None
+    if file_extension == '.pdf':
+        file_format_id = file_router_state.pdf_format_id
+    elif file_extension in ['.jpg', '.jpeg']:
+        file_format_id = file_router_state.jpg_format_id
+    elif file_extension == '.png':
+        file_format_id = file_router_state.png_format_id
+
+
+    existing_file_query = (
+        select(FileModel)
+        .where(
+            and_(
+                FileModel.user_id == current_user.id,
+                FileModel.file_type_id == file_type_id,
+                FileModel.owner_type_id == file_router_state.user_owner_type_id
+            )
+        )
+        .options(
+            selectinload(FileModel.file_format),
+            selectinload(FileModel.file_type),
+            selectinload(FileModel.owner_type)
+        )
+    )
+    result = await session.execute(existing_file_query)
+    existing_file = result.scalar_one_or_none()
+
+    upload_dir = Path("uploads/users") / str(current_user.id)
+    upload_dir.mkdir(parents=True, exist_ok=True)
+
+    file_path = upload_dir / f"{document_type}{file_extension}"
+
+    try:
+        if existing_file and os.path.exists(existing_file.file_path):
+            os.remove(existing_file.file_path)
+
+        contents = await file.read()
+
+        with open(file_path, "wb") as f:
+            f.write(contents)
+
+        if existing_file:
+            existing_file.filename = file.filename
+            existing_file.file_path = str(file_path)
+            existing_file.file_format_id = file_format_id
+        else:
+            new_file = FileModel(
+                filename=file.filename,
+                file_path=str(file_path),
+                file_format_id=file_format_id,
+                file_type_id=file_type_id,
+                owner_type_id=file_router_state.user_owner_type_id,
+                user_id=current_user.id
+            )
+            session.add(new_file)
+
+        user_query = (
+            select(User)
+            .options(
+                selectinload(User.participant_info),
+                selectinload(User.mentor_info),
+                selectinload(User.user2roles).selectinload(User2Roles.role),
+                selectinload(User.current_status),
+                selectinload(User.status_history).selectinload(UserStatusHistory.status),
+            )
+            .where(User.id == current_user.id)
+        )
+
+        result = await session.execute(user_query)
+        user = result.scalar_one()
+
+        if user.current_status_id == user_router_state.need_update_status_id:
+            new_status_history = UserStatusHistory(
+                user_id=user.id,
+                status_id=user_router_state.pending_status_id,
+                comment="Документы обновлены пользователем"
+            )
+            session.add(new_status_history)
+            user.current_status_id = user_router_state.pending_status_id
+
+        await session.commit()
+
+        refresh_query = (
+            select(User)
+            .options(
+                selectinload(User.participant_info),
+                selectinload(User.mentor_info),
+                selectinload(User.user2roles).selectinload(User2Roles.role),
+                selectinload(User.current_status),
+                selectinload(User.status_history).selectinload(UserStatusHistory.status),
+            )
+            .where(User.id == current_user.id)
+        )
+
+        result = await session.execute(refresh_query)
+        updated_user = result.scalar_one()
+
+        return updated_user
+
+    except Exception as e:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Ошибка при обновлении документов пользователя"
         )
