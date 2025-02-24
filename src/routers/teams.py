@@ -1,10 +1,10 @@
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, status, File, UploadFile, Form
+from fastapi import APIRouter, Depends, HTTPException, status, File, UploadFile, Form, Query
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, exists
-from typing import List
+from sqlalchemy import select, exists, func
+from typing import List, Optional
 import json
 from uuid import UUID
 import os
@@ -18,7 +18,7 @@ from src.models.file import File as DBFile
 from src.models.enums import TeamMemberStatus, TeamRole, FileType, FileOwnerType
 from src.models.user import User2Roles
 from src.schemas.team import TeamCreate, TeamResponse, TeamMemberResponse, TeamMemberCreate, TeamInvitationResponse, \
-    TeamMembersResponse, TeamMemberDetailResponse, TeamStatusDetails
+    TeamMembersResponse, TeamMemberDetailResponse, TeamStatusDetails, PaginatedTeamsResponse
 from src.auth.jwt import get_current_user
 from src.routers.auth import save_file
 from src.utils.router_states import team_router_state, user_router_state
@@ -636,6 +636,86 @@ async def get_mentor_teams(
     ]
 
 
+@router.get("/admin/teams", response_model=PaginatedTeamsResponse)
+async def get_admin_teams(
+    limit: int = Query(default=10, le=50, description="Number of results to return"),
+    offset: int = Query(default=0, description="Number of results to skip"),
+    search: Optional[str] = Query(None, min_length=2, description="Optional search query for team name"),
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session)
+):
+    """
+    Получение списка всех команд с пагинацией и поиском.
+    Доступно только для администраторов и организаторов.
+    """
+    current_user_query = (
+        select(User)
+        .options(selectinload(User.user2roles))
+        .where(User.id == current_user.id)
+    )
+    result = await session.execute(current_user_query)
+    current_user_with_roles = result.scalar_one()
+
+    is_admin = any(
+        role.role_id == user_router_state.admin_role_id
+        for role in current_user_with_roles.user2roles
+    )
+    is_organizer = any(
+        role.role_id == user_router_state.organizer_role_id
+        for role in current_user_with_roles.user2roles
+    )
+
+    if not (is_admin or is_organizer):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Доступ разрешен только для администраторов и организаторов"
+        )
+
+    query = (
+        select(Team)
+        .options(
+            selectinload(Team.members)
+            .selectinload(TeamMember.user)
+            .selectinload(User.current_status),
+            selectinload(Team.members)
+            .selectinload(TeamMember.role),
+            selectinload(Team.members)
+            .selectinload(TeamMember.status)
+        )
+    )
+
+    if search:
+        search_query = f"%{search}%"
+        query = query.where(Team.team_name.ilike(search_query))
+
+    count_query = select(func.count()).select_from(query.subquery())
+    total = await session.scalar(count_query)
+
+    query = (
+        query
+        .order_by(Team.team_name)
+        .limit(limit)
+        .offset(offset)
+    )
+
+    result = await session.execute(query)
+    teams = result.scalars().all()
+
+    return {
+        "teams": [
+            TeamResponse(
+                id=team.id,
+                team_name=team.team_name,
+                team_motto=team.team_motto,
+                team_leader_id=team.team_leader_id,
+                logo_file_id=team.logo_file_id,
+                status_details=TeamStatusDetails(**team.get_status_details())
+            )
+            for team in teams
+        ],
+        "total": total
+    }
+
 @router.get("/mentor/teams/{team_id}", response_model=TeamResponse)
 async def get_mentor_team(
         team_id: UUID,
@@ -655,24 +735,30 @@ async def get_mentor_team(
         for role in user_roles
     )
 
-    if not is_mentor:
+    is_admin = any(
+        role.role_id == user_router_state.admin_role_id
+        for role in user_roles
+    )
+
+    if not (is_mentor or is_admin):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Доступ разрешен только для менторов"
         )
 
-    mentor_check_query = select(TeamMember).where(
-        TeamMember.team_id == team_id,
-        TeamMember.user_id == current_user.id,
-        TeamMember.role_id == team_router_state.mentor_role_id,
-        TeamMember.status_id == team_router_state.accepted_status_id
-    )
-    mentor_check = await session.execute(mentor_check_query)
-    if not mentor_check.scalar_one_or_none():
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="У вас нет доступа к информации об этой команде"
+    if not is_admin:
+        mentor_check_query = select(TeamMember).where(
+            TeamMember.team_id == team_id,
+            TeamMember.user_id == current_user.id,
+            TeamMember.role_id == team_router_state.mentor_role_id,
+            TeamMember.status_id == team_router_state.accepted_status_id
         )
+        mentor_check = await session.execute(mentor_check_query)
+        if not mentor_check.scalar_one_or_none():
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="У вас нет доступа к информации об этой команде"
+            )
 
     team_query = (
         select(Team)
@@ -907,7 +993,21 @@ async def get_team_members(
         TeamMember.status_id == team_router_state.accepted_status_id
     )
     is_member = await session.execute(member_query)
-    if not is_member.scalar_one_or_none():
+    is_member = is_member.scalar_one_or_none()
+
+    user_roles_query = (
+        select(User2Roles)
+        .where(User2Roles.user_id == current_user.id)
+    )
+    user_roles = await session.execute(user_roles_query)
+    user_roles = user_roles.scalars().all()
+
+    is_admin = any(
+        role.role_id == user_router_state.admin_role_id
+        for role in user_roles
+    )
+
+    if not (is_member or is_admin):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="У вас нет доступа к информации об участниках этой команды"

@@ -127,3 +127,11 @@ class TeamInvitationResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+class PaginatedTeamsResponse(BaseModel):
+    """Схема ответа со списком команд и общим количеством"""
+    teams: List[TeamResponse]
+    total: int
+
+    class Config:
+        from_attributes = True
