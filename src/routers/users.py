@@ -148,8 +148,9 @@ async def get_users(
         limit: int = Query(default=10, le=50, description="Number of results to return"),
         offset: int = Query(default=0, description="Number of results to skip"),
         search: Optional[str] = Query(None, min_length=2,
-                                    description="Optional search query for user full name or email"),
-        roles: Optional[List[str]] = Query(None, description="Filter by user roles. Use '-' to find users without roles"),
+                                      description="Optional search query for user full name or email"),
+        roles: Optional[List[str]] = Query(None,
+                                           description="Filter by user roles. Use '-' to find users without roles"),
         statuses: Optional[List[UserStatus]] = Query(None, description="Filter by user statuses"),
         current_user: User = Depends(get_current_user),
         session: AsyncSession = Depends(get_session)
@@ -428,6 +429,7 @@ async def change_user_status(
 
     return user
 
+
 @router.put("/{user_id}/roles", response_model=UserResponse)
 async def update_user_roles(
         user_id: uuid.UUID,
@@ -502,3 +504,81 @@ async def update_user_roles(
         )
 
     return updated_user
+
+
+@router.put("/me", response_model=UserResponse)
+async def update_current_user(
+        user_data: dict,
+        current_user: User = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session)
+):
+    """
+    Обновление данных текущего пользователя.
+    Пользователь может обновить свои основные данные и информацию в зависимости от роли
+    (participant_info для участников или mentor_info для менторов)
+    """
+    user_query = (
+        select(User)
+        .options(
+            selectinload(User.participant_info),
+            selectinload(User.mentor_info),
+            selectinload(User.user2roles).selectinload(User2Roles.role),
+            selectinload(User.current_status),
+            selectinload(User.status_history).selectinload(UserStatusHistory.status),
+        )
+        .where(User.id == current_user.id)
+    )
+
+    result = await session.execute(user_query)
+    user = result.scalar_one()
+
+    if 'full_name' in user_data:
+        user.full_name = user_data['full_name']
+
+    if user.participant_info and 'participant_info' in user_data:
+        participant_data = user_data['participant_info']
+        if 'number' in participant_data:
+            user.participant_info.number = participant_data['number']
+        if 'vuz' in participant_data:
+            user.participant_info.vuz = participant_data['vuz']
+        if 'vuz_direction' in participant_data:
+            user.participant_info.vuz_direction = participant_data['vuz_direction']
+        if 'code_speciality' in participant_data:
+            user.participant_info.code_speciality = participant_data['code_speciality']
+        if 'course' in participant_data:
+            user.participant_info.course = participant_data['course']
+
+    if user.mentor_info and 'mentor_info' in user_data:
+        mentor_data = user_data['mentor_info']
+        if 'number' in mentor_data:
+            user.mentor_info.number = mentor_data['number']
+        if 'job' in mentor_data:
+            user.mentor_info.job = mentor_data['job']
+        if 'job_title' in mentor_data:
+            user.mentor_info.job_title = mentor_data['job_title']
+
+    try:
+        await session.commit()
+
+        refresh_query = (
+            select(User)
+            .options(
+                selectinload(User.participant_info),
+                selectinload(User.mentor_info),
+                selectinload(User.user2roles).selectinload(User2Roles.role),
+                selectinload(User.current_status),
+                selectinload(User.status_history).selectinload(UserStatusHistory.status),
+            )
+            .where(User.id == current_user.id)
+        )
+
+        result = await session.execute(refresh_query)
+        updated_user = result.scalar_one()
+
+        return updated_user
+    except Exception as e:
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Ошибка при обновлении данных пользователя"
+        )

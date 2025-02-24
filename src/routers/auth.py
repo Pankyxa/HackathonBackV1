@@ -343,7 +343,9 @@ async def read_users_me(
     query = (
         select(User)
         .options(
-            selectinload(User.files),
+            selectinload(User.files).selectinload(FileModel.file_format),
+            selectinload(User.files).selectinload(FileModel.file_type),
+            selectinload(User.files).selectinload(FileModel.owner_type),
             selectinload(User.participant_info),
             selectinload(User.mentor_info),
             selectinload(User.user2roles).selectinload(User2Roles.role),
@@ -354,5 +356,22 @@ async def read_users_me(
     )
     result = await session.execute(query)
     user = result.scalar_one_or_none()
-    print(user.roles)
+
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+
+    is_mentor = any(role.role_id == user_router_state.mentor_role_id for role in user.user2roles)
+    is_participant = any(role.role_id == user_router_state.participant_role_id for role in user.user2roles)
+
+    if is_mentor and not is_participant:
+        user.participant_info = None
+    elif is_participant and not is_mentor:
+        user.mentor_info = None
+    elif not is_mentor and not is_participant:
+        user.participant_info = None
+        user.mentor_info = None
+
     return user
