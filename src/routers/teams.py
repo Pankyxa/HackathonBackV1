@@ -372,14 +372,33 @@ async def get_pending_invitations(
     query = (
         select(Team, TeamMember)
         .join(TeamMember, Team.id == TeamMember.team_id)
+        .options(
+            selectinload(Team.members)
+            .selectinload(TeamMember.user)
+            .selectinload(User.current_status),
+            selectinload(Team.members)
+            .selectinload(TeamMember.role),
+            selectinload(Team.members)
+            .selectinload(TeamMember.status)
+        )
         .where(
             TeamMember.user_id == current_user.id,
-            TeamMember.status == TeamMemberStatus.PENDING
+            TeamMember.status_id == team_router_state.pending_status_id
         )
     )
     result = await session.execute(query)
     invitations = [
-        TeamInvitationResponse(team=team, member=member)
+        TeamInvitationResponse(
+            team=TeamResponse(
+                id=team.id,
+                team_name=team.team_name,
+                team_motto=team.team_motto,
+                team_leader_id=team.team_leader_id,
+                logo_file_id=team.logo_file_id,
+                status_details=TeamStatusDetails(**team.get_status_details())
+            ),
+            member=member
+        )
         for team, member in result
     ]
     return invitations
@@ -392,10 +411,11 @@ async def accept_invitation(
         session: AsyncSession = Depends(get_session)
 ):
     """Принять приглашение в команду"""
+    # Получаем приглашение, которое хотим принять
     query = select(TeamMember).where(
         TeamMember.id == invitation_id,
         TeamMember.user_id == current_user.id,
-        TeamMember.status == TeamMemberStatus.PENDING
+        TeamMember.status_id == team_router_state.pending_status_id
     )
     invitation = await session.execute(query)
     invitation = invitation.scalar_one_or_none()
@@ -406,7 +426,21 @@ async def accept_invitation(
             detail="Приглашение не найдено"
         )
 
-    invitation.status = TeamMemberStatus.ACCEPTED
+    # Находим все остальные pending приглашения пользователя
+    other_invitations_query = select(TeamMember).where(
+        TeamMember.user_id == current_user.id,
+        TeamMember.status_id == team_router_state.pending_status_id,
+        TeamMember.id != invitation_id
+    )
+    other_invitations = await session.execute(other_invitations_query)
+
+    # Отклоняем все остальные приглашения
+    for other_invitation in other_invitations.scalars():
+        other_invitation.status_id = team_router_state.rejected_status_id
+
+    # Принимаем выбранное приглашение
+    invitation.status_id = team_router_state.accepted_status_id
+
     await session.commit()
     return {"message": "Приглашение принято"}
 
@@ -421,7 +455,7 @@ async def reject_invitation(
     query = select(TeamMember).where(
         TeamMember.id == invitation_id,
         TeamMember.user_id == current_user.id,
-        TeamMember.status == TeamMemberStatus.PENDING
+        TeamMember.status_id == team_router_state.pending_status_id  # Changed this line
     )
     invitation = await session.execute(query)
     invitation = invitation.scalar_one_or_none()
@@ -432,7 +466,7 @@ async def reject_invitation(
             detail="Приглашение не найдено"
         )
 
-    invitation.status = TeamMemberStatus.REJECTED
+    invitation.status_id = team_router_state.rejected_status_id  # Changed this line
     await session.commit()
     return {"message": "Приглашение отклонено"}
 

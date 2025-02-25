@@ -80,7 +80,8 @@ async def search_users(
                         select(1)
                         .where(
                             TeamMember.user_id == User.id,
-                            TeamMember.team_id.in_(current_user_team)
+                            TeamMember.team_id.in_(current_user_team),
+                            TeamMember.status_id == team_router_state.accepted_status_id,
                         )
                     )
                 )
