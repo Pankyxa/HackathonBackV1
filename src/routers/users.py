@@ -604,13 +604,22 @@ async def update_user_documents(
             detail="Неверный тип документа. Допустимые значения: consent, certificate"
         )
 
-    file_type_id = None
+    user_query = (
+        select(User)
+        .options(
+            selectinload(User.user2roles)
+        )
+        .where(User.id == current_user.id)
+    )
+    result = await session.execute(user_query)
+    user_with_roles = result.scalar_one()
+
     if document_type == 'consent':
         file_type_id = file_router_state.consent_type_id
     else:
         is_participant = any(
             role.role_id == user_router_state.participant_role_id
-            for role in current_user.user2roles
+            for role in user_with_roles.user2roles
         )
         file_type_id = (
             file_router_state.education_certificate_type_id if is_participant
@@ -631,7 +640,6 @@ async def update_user_documents(
         file_format_id = file_router_state.jpg_format_id
     elif file_extension == '.png':
         file_format_id = file_router_state.png_format_id
-
 
     existing_file_query = (
         select(FileModel)

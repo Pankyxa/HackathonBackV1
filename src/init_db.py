@@ -24,9 +24,9 @@ async def init_models(engine: AsyncEngine):
 
     async with async_session() as session:
         user_statuses_data = [
-            {"name": "pending", "description": "В ожидании"},
+            {"name": "pending", "description": "В ожидании подтверждения личных данных"},
             {"name": "approved", "description": "Подтвержден"},
-            {"name": "need_update", "description": "Отправлен на переотправление новых файлов"}
+            {"name": "need_update", "description": "Требуется обновление личных данных"}
         ]
 
         for status_data in user_statuses_data:
