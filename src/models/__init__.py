@@ -3,6 +3,7 @@ from .user import User, ParticipantInfo, MentorInfo, UserStatusType, UserStatusH
 from .file import File
 from .team import Team, TeamMember
 from .role import Role
+from .evaluation import TeamEvaluation
 from .enum_tables import TeamRoleTable, TeamMemberStatusTable, FileFormatTable, FileTypeTable, FileOwnerTypeTable
 
 __all__ = [
@@ -25,5 +26,6 @@ __all__ = [
     'TeamMemberStatusTable',
     'FileFormatTable',
     'FileTypeTable',
-    'FileOwnerTypeTable'
+    'FileOwnerTypeTable',
+    'TeamEvaluation'
 ]
