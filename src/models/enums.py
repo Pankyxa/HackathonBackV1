@@ -30,6 +30,9 @@ class TeamMemberStatus(str, Enum):
 class FileFormat(Enum):
     PDF = "pdf"
     IMAGE = "image"
+    ZIP = "zip"
+    TXT = "txt"
+    MD = "md"
 
 
 class FileType(Enum):
@@ -37,6 +40,8 @@ class FileType(Enum):
     EDUCATION_CERTIFICATE = "education_certificate"
     TEAM_LOGO = "team_logo"
     JOB_CERTIFICATE = "job_certificate"
+    SOLUTION = "solution"  # Для ZIP файлов с решением
+    DEPLOYMENT = "deployment"  # Для файлов с описанием развертывания
 
 
 class FileOwnerType(Enum):

@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.db import engine
 from src.init_db import init_models
 from src.routers import auth_router, teams_router, users_router, files_router, stages_router
+from src.routers import auth_router, teams_router, users_router, files_router, evaluations_router
 from src.utils.enum_utils import initialize_enum_data
 from src.utils.router_states import initialize_router_states
 
@@ -32,6 +33,7 @@ app.include_router(teams_router)
 app.include_router(users_router)
 app.include_router(files_router)
 app.include_router(stages_router)
+app.include_router(evaluations_router)
 
 @app.on_event("startup")
 async def startup_event():

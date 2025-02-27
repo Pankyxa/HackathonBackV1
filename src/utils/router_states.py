@@ -32,36 +32,47 @@ class TeamRouterState:
 
 class FileRouterState:
     def __init__(self):
+        # Типы файлов
         self.consent_type_id: UUID = None
         self.education_certificate_type_id: UUID = None
         self.team_logo_type_id: UUID = None
+        self.job_certificate_type_id: UUID = None
+        self.solution_type_id: UUID = None        # Добавлено
+        self.deployment_type_id: UUID = None      # Добавлено
 
+        # Типы владельцев
         self.user_owner_type_id: UUID = None
         self.team_owner_type_id: UUID = None
 
+        # Форматы файлов
         self.pdf_format_id: UUID = None
         self.image_format_id: UUID = None
-
-    class UserStatusState:
-        def __init__(self):
-            self.pending_status_id: UUID = None
-            self.approved_status_id: UUID = None
-            self.need_update_status_id: UUID = None
+        self.zip_format_id: UUID = None          # Добавлено
+        self.txt_format_id: UUID = None          # Добавлено
+        self.md_format_id: UUID = None           # Добавлено
 
     async def initialize(self, session: AsyncSession):
         """Инициализация ID при старте приложения"""
         enum_data = get_enum_data()
 
+        # Инициализация типов файлов
         self.consent_type_id = enum_data.get_file_type_id(FileType.CONSENT)
         self.education_certificate_type_id = enum_data.get_file_type_id(FileType.EDUCATION_CERTIFICATE)
         self.job_certificate_type_id = enum_data.get_file_type_id(FileType.JOB_CERTIFICATE)
         self.team_logo_type_id = enum_data.get_file_type_id(FileType.TEAM_LOGO)
+        self.solution_type_id = enum_data.get_file_type_id(FileType.SOLUTION)         # Добавлено
+        self.deployment_type_id = enum_data.get_file_type_id(FileType.DEPLOYMENT)     # Добавлено
 
+        # Инициализация типов владельцев
         self.user_owner_type_id = enum_data.get_file_owner_type_id(FileOwnerType.USER)
         self.team_owner_type_id = enum_data.get_file_owner_type_id(FileOwnerType.TEAM)
 
+        # Инициализация форматов файлов
         self.pdf_format_id = enum_data.get_file_format_id(FileFormat.PDF)
         self.image_format_id = enum_data.get_file_format_id(FileFormat.IMAGE)
+        self.zip_format_id = enum_data.get_file_format_id(FileFormat.ZIP)            # Добавлено
+        self.txt_format_id = enum_data.get_file_format_id(FileFormat.TXT)            # Добавлено
+        self.md_format_id = enum_data.get_file_format_id(FileFormat.MD)              # Добавлено
 
 
 class UserRouterState:
