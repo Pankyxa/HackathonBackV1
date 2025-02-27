@@ -147,7 +147,7 @@ async def search_mentors(
     return mentors
 
 
-@router.get("/", response_model=PaginatedUserResponse)
+@router.get("/all", response_model=PaginatedUserResponse)
 async def get_users(
         limit: int = Query(default=10, le=50, description="Number of results to return"),
         offset: int = Query(default=0, description="Number of results to skip"),
