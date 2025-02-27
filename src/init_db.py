@@ -1,7 +1,7 @@
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 from src.db import Base
-from src.models import User, File, Team, Role, TeamMember, UserStatusType
+from src.models import User, File, Team, Role, TeamMember, UserStatusType, Stage
 from src.models.enum_tables import (
     TeamRoleTable,
     TeamMemberStatusTable,
@@ -9,7 +9,7 @@ from src.models.enum_tables import (
     FileTypeTable,
     FileOwnerTypeTable
 )
-from src.models.enums import TeamRole, TeamMemberStatus, FileFormat, FileType, FileOwnerType
+from src.models.enums import TeamRole, TeamMemberStatus, FileFormat, FileType, FileOwnerType, StageType
 import uuid
 
 
@@ -149,5 +149,78 @@ async def init_models(engine: AsyncEngine):
                     description=owner_type["description"]
                 )
                 session.add(new_owner_type)
+
+        stages_data = [
+            {
+                "id": uuid.uuid4(),
+                "name": "Регистрация",
+                "type": StageType.REGISTRATION.value,
+                "order": 1,
+                "is_active": True
+            },
+            {
+                "id": uuid.uuid4(),
+                "name": "Регистрация закрыта",
+                "type": StageType.REGISTRATION_CLOSED.value,
+                "order": 2,
+                "is_active": False
+            },
+            {
+                "id": uuid.uuid4(),
+                "name": "Распределение заданий",
+                "type": StageType.TASK_DISTRIBUTION.value,
+                "order": 3,
+                "is_active": False
+            },
+            {
+                "id": uuid.uuid4(),
+                "name": "Прием решений",
+                "type": StageType.SOLUTION_SUBMISSION.value,
+                "order": 4,
+                "is_active": False
+            },
+            {
+                "id": uuid.uuid4(),
+                "name": "Проверка решений",
+                "type": StageType.SOLUTION_REVIEW.value,
+                "order": 5,
+                "is_active": False
+            },
+            {
+                "id": uuid.uuid4(),
+                "name": "Онлайн защита",
+                "type": StageType.ONLINE_DEFENSE.value,
+                "order": 6,
+                "is_active": False
+            },
+            {
+                "id": uuid.uuid4(),
+                "name": "Публикация результатов",
+                "type": StageType.RESULTS_PUBLICATION.value,
+                "order": 7,
+                "is_active": False
+            },
+            {
+                "id": uuid.uuid4(),
+                "name": "Церемония награждения",
+                "type": StageType.AWARD_CEREMONY.value,
+                "order": 8,
+                "is_active": False
+            }
+        ]
+
+        for stage_data in stages_data:
+            existing_stage = await session.execute(
+                Stage.__table__.select().where(Stage.order == stage_data["order"])
+            )
+            if not list(existing_stage):
+                stage = Stage(
+                    id=uuid.uuid4(),
+                    name=stage_data["name"],
+                    type=stage_data["type"],
+                    order=stage_data["order"],
+                    is_active=stage_data["is_active"]
+                )
+                session.add(stage)
 
         await session.commit()

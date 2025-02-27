@@ -42,3 +42,14 @@ class FileType(Enum):
 class FileOwnerType(Enum):
     USER = "user"
     TEAM = "team"
+
+
+class StageType(Enum):
+    REGISTRATION = "registration"
+    REGISTRATION_CLOSED = "registration_closed"
+    TASK_DISTRIBUTION = "task_distribution"
+    SOLUTION_SUBMISSION = "solution_submission"
+    SOLUTION_REVIEW = "solution_review"
+    ONLINE_DEFENSE = "online_defense"
+    RESULTS_PUBLICATION = "results_publication"
+    AWARD_CEREMONY = "award_ceremony"

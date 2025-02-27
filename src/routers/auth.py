@@ -10,11 +10,13 @@ import aiofiles
 from src.auth.utils import verify_password, get_password_hash
 from src.db import get_session
 from src.models import User, FileType, FileOwnerType, File as FileModel, ParticipantInfo
+from src.models.enums import StageType
 from src.models.user import User2Roles, MentorInfo, UserStatusHistory
 from src.schemas.user import UserCreate, UserLogin, Token, UserResponse, UserResponseRegister, MentorCreate
 from src.auth.jwt import create_access_token, get_current_user
 
 from src.utils.router_states import file_router_state, user_router_state
+from src.utils.stage_checker import check_stage
 
 security = HTTPBearer()
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -84,6 +86,8 @@ async def register(
         education_certificate_file: UploadFile = File(...),
         session: AsyncSession = Depends(get_session)
 ):
+    await check_stage(session, StageType.REGISTRATION)
+
     user_data = UserCreate(
         email=email,
         password=password,
@@ -180,6 +184,8 @@ async def register_mentor(
         job_certificate_file: UploadFile = File(...),
         session: AsyncSession = Depends(get_session)
 ):
+    await check_stage(session, StageType.REGISTRATION)
+
     mentor_data = MentorCreate(
         email=email,
         password=password,

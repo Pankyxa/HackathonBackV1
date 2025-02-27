@@ -7,8 +7,9 @@ from src.models import (
     TeamRoleTable, TeamMemberStatusTable, FileFormatTable,
     FileTypeTable, FileOwnerTypeTable, Role,
     TeamRole, TeamMemberStatus, FileFormat,
-    FileType, FileOwnerType, UserRole, UserStatus, UserStatusType
+    FileType, FileOwnerType, UserRole, UserStatus, UserStatusType, Stage
 )
+from src.models.enums import StageType
 
 
 class EnumData:
@@ -20,6 +21,7 @@ class EnumData:
         self.file_owner_type_ids: Dict[FileOwnerType, UUID] = {}
         self.user_role_ids: Dict[UserRole, UUID] = {}
         self.user_status_ids: Dict[UserStatus, UUID] = {}
+        self.stage_ids: Dict[StageType, UUID] = {}
 
     async def initialize(self, session: AsyncSession):
         """Инициализация всех ID из enum таблиц"""
@@ -51,6 +53,21 @@ class EnumData:
         for status in user_statuses.scalars():
             self.user_status_ids[UserStatus(status.name)] = status.id
 
+        stages = await session.execute(select(Stage))
+        stage_type_map = {
+            1: StageType.REGISTRATION,
+            2: StageType.REGISTRATION_CLOSED,
+            3: StageType.TASK_DISTRIBUTION,
+            4: StageType.SOLUTION_SUBMISSION,
+            5: StageType.SOLUTION_REVIEW,
+            6: StageType.ONLINE_DEFENSE,
+            7: StageType.RESULTS_PUBLICATION,
+            8: StageType.AWARD_CEREMONY
+        }
+        for stage in stages.scalars():
+            if stage.order in stage_type_map:
+                self.stage_ids[stage_type_map[stage.order]] = stage.id
+
     def get_user_role_id(self, role: UserRole) -> UUID:
         return self.user_role_ids[role]
 
@@ -72,6 +89,10 @@ class EnumData:
     def get_user_status_id(self, status: UserStatus) -> UUID:
         """Получение ID статуса пользователя"""
         return self.user_status_ids[status]
+
+    def get_stage_id(self, stage_type: StageType) -> UUID:
+        """Получение ID этапа"""
+        return self.stage_ids[stage_type]
 
 
 enum_data = EnumData()

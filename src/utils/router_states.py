@@ -1,10 +1,13 @@
 from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 from src.models.enums import (
     TeamRole, TeamMemberStatus, FileType,
-    FileOwnerType, FileFormat, UserRole, UserStatus
+    FileOwnerType, FileFormat, UserRole, UserStatus,
+    StageType
 )
 from src.utils.enum_utils import get_enum_data
+from src.models import Stage
 
 
 class TeamRouterState:
@@ -99,10 +102,55 @@ class UserStatusState:
         self.need_update_status_id = enum_data.get_user_status_id(UserStatus.NEED_UPDATE)
 
 
+class StageRouterState:
+    def __init__(self):
+        self.registration_stage_id: UUID = None
+        self.registration_closed_stage_id: UUID = None
+        self.task_distribution_stage_id: UUID = None
+        self.solution_submission_stage_id: UUID = None
+        self.solution_review_stage_id: UUID = None
+        self.online_defense_stage_id: UUID = None
+        self.results_publication_stage_id: UUID = None
+        self.award_ceremony_stage_id: UUID = None
+        self.current_stage_id: UUID = None
+        self.current_stage_order: int = None
+
+    async def initialize(self, session: AsyncSession):
+        """Инициализация ID этапов при старте приложения"""
+        enum_data = get_enum_data()
+
+        self.registration_stage_id = enum_data.get_stage_id(StageType.REGISTRATION)
+        self.registration_closed_stage_id = enum_data.get_stage_id(StageType.REGISTRATION_CLOSED)
+        self.task_distribution_stage_id = enum_data.get_stage_id(StageType.TASK_DISTRIBUTION)
+        self.solution_submission_stage_id = enum_data.get_stage_id(StageType.SOLUTION_SUBMISSION)
+        self.solution_review_stage_id = enum_data.get_stage_id(StageType.SOLUTION_REVIEW)
+        self.online_defense_stage_id = enum_data.get_stage_id(StageType.ONLINE_DEFENSE)
+        self.results_publication_stage_id = enum_data.get_stage_id(StageType.RESULTS_PUBLICATION)
+        self.award_ceremony_stage_id = enum_data.get_stage_id(StageType.AWARD_CEREMONY)
+
+        result = await session.execute(
+            select(Stage).where(Stage.is_active == True)
+        )
+        current_stage = result.scalar_one_or_none()
+        if current_stage:
+            self.current_stage_id = current_stage.id
+            self.current_stage_order = current_stage.order
+
+    async def get_current_stage_order(self, session: AsyncSession) -> int:
+        """Получить порядковый номер текущего этапа"""
+        result = await session.execute(
+            select(Stage.order).where(Stage.is_active == True)
+        )
+        current_stage = result.scalar_one_or_none()
+        self.current_stage_order = current_stage
+        return current_stage
+
+
 team_router_state = TeamRouterState()
 file_router_state = FileRouterState()
 user_router_state = UserRouterState()
 user_status_state = UserStatusState()
+stage_router_state = StageRouterState()
 
 
 async def initialize_router_states(session: AsyncSession):
@@ -111,3 +159,4 @@ async def initialize_router_states(session: AsyncSession):
     await file_router_state.initialize(session)
     await user_router_state.initialize(session)
     await user_status_state.initialize(session)
+    await stage_router_state.initialize(session)

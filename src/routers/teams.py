@@ -13,15 +13,16 @@ from sqlalchemy.orm import joinedload, selectinload
 from sqlalchemy.testing.plugin.plugin_base import options
 
 from src.db import get_session
-from src.models import User, Team, TeamMember, Role, UserStatusHistory
+from src.models import User, Team, TeamMember, Role, UserStatusHistory, Stage
 from src.models.file import File as DBFile
-from src.models.enums import TeamMemberStatus, TeamRole, FileType, FileOwnerType
+from src.models.enums import TeamMemberStatus, TeamRole, FileType, FileOwnerType, StageType
 from src.models.user import User2Roles
 from src.schemas.team import TeamCreate, TeamResponse, TeamMemberResponse, TeamMemberCreate, TeamInvitationResponse, \
     TeamMembersResponse, TeamMemberDetailResponse, TeamStatusDetails, PaginatedTeamsResponse
 from src.auth.jwt import get_current_user
 from src.routers.auth import save_file
-from src.utils.router_states import team_router_state, user_router_state
+from src.utils.router_states import team_router_state, user_router_state, stage_router_state
+from src.utils.stage_checker import check_stage
 
 router = APIRouter(prefix="/teams", tags=["teams"])
 
@@ -51,6 +52,8 @@ async def create_team(
         current_user: User = Depends(get_current_user),
         session: AsyncSession = Depends(get_session)
 ):
+    await check_stage(session, StageType.REGISTRATION)
+
     """Создание команды с указанием участников по их ID"""
     try:
         member_ids_list = [UUID(id_str) for id_str in json.loads(member_ids)]
@@ -181,6 +184,8 @@ async def invite_team_mentor(
         session: AsyncSession = Depends(get_session)
 ):
     """Пригласить ментора в команду"""
+    await check_stage(session, StageType.REGISTRATION)
+
     team_query = (
         select(Team)
         .options(
@@ -295,6 +300,8 @@ async def invite_team_member(
         session: AsyncSession = Depends(get_session)
 ):
     """Пригласить пользователя в команду"""
+    await check_stage(session, StageType.REGISTRATION)
+
     team_query = (
         select(Team)
         .options(
@@ -349,6 +356,12 @@ async def invite_team_member(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Пользователь уже является участником команды"
             )
+        elif existing_member.status_id == team_router_state.rejected_status_id:
+            existing_member.status_id = team_router_state.pending_status_id
+            existing_member.role_id = get_role_id(member_data.role)
+            await session.commit()
+            await session.refresh(existing_member)
+            return existing_member
 
     team_member = TeamMember(
         id=uuid.uuid4(),
@@ -369,6 +382,8 @@ async def get_pending_invitations(
         session: AsyncSession = Depends(get_session)
 ):
     """Получить список pending приглашений в команды"""
+    await check_stage(session, StageType.REGISTRATION)
+
     query = (
         select(Team, TeamMember)
         .join(TeamMember, Team.id == TeamMember.team_id)
@@ -411,7 +426,8 @@ async def accept_invitation(
         session: AsyncSession = Depends(get_session)
 ):
     """Принять приглашение в команду"""
-    # Получаем приглашение, которое хотим принять
+    await check_stage(session, StageType.REGISTRATION)
+
     query = select(TeamMember).where(
         TeamMember.id == invitation_id,
         TeamMember.user_id == current_user.id,
@@ -426,20 +442,100 @@ async def accept_invitation(
             detail="Приглашение не найдено"
         )
 
-    # Находим все остальные pending приглашения пользователя
+    is_mentor = invitation.role_id == team_router_state.mentor_role_id
+
+    if is_mentor:
+        existing_mentor_query = select(TeamMember).where(
+            TeamMember.team_id == invitation.team_id,
+            TeamMember.role_id == team_router_state.mentor_role_id,
+            TeamMember.status_id == team_router_state.accepted_status_id
+        )
+        existing_mentor = await session.execute(existing_mentor_query)
+        if existing_mentor.scalar_one_or_none():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="В команде уже есть ментор"
+            )
+
+        other_mentor_invitations_query = select(TeamMember).where(
+            TeamMember.team_id == invitation.team_id,
+            TeamMember.role_id == team_router_state.mentor_role_id,
+            TeamMember.status_id == team_router_state.pending_status_id,
+            TeamMember.id != invitation_id
+        )
+        other_mentor_invitations = await session.execute(other_mentor_invitations_query)
+        for other_invitation in other_mentor_invitations.scalars():
+            other_invitation.status_id = team_router_state.rejected_status_id
+    else:
+        team_members_count_query = select(func.count()).select_from(TeamMember).where(
+            TeamMember.team_id == invitation.team_id,
+            TeamMember.status_id == team_router_state.accepted_status_id,
+            TeamMember.role_id != team_router_state.mentor_role_id
+        )
+        current_team_members = await session.execute(team_members_count_query)
+        current_team_members = current_team_members.scalar_one()
+
+        if current_team_members == 4:
+            other_pending_invitations_query = select(TeamMember).where(
+                TeamMember.team_id == invitation.team_id,
+                TeamMember.status_id == team_router_state.pending_status_id,
+                TeamMember.role_id != team_router_state.mentor_role_id,
+                TeamMember.id != invitation_id
+            )
+            other_pending_invitations = await session.execute(other_pending_invitations_query)
+            for other_invitation in other_pending_invitations.scalars():
+                other_invitation.status_id = team_router_state.rejected_status_id
+
     other_invitations_query = select(TeamMember).where(
         TeamMember.user_id == current_user.id,
         TeamMember.status_id == team_router_state.pending_status_id,
         TeamMember.id != invitation_id
     )
     other_invitations = await session.execute(other_invitations_query)
-
-    # Отклоняем все остальные приглашения
     for other_invitation in other_invitations.scalars():
         other_invitation.status_id = team_router_state.rejected_status_id
 
-    # Принимаем выбранное приглашение
     invitation.status_id = team_router_state.accepted_status_id
+    await session.flush()
+    await session.refresh(invitation)
+
+    teams_query = (
+        select(Team)
+        .options(
+            selectinload(Team.members.and_(
+                TeamMember.status_id == team_router_state.accepted_status_id
+            ))
+            .selectinload(TeamMember.user)
+            .selectinload(User.current_status),
+            selectinload(Team.members)
+            .selectinload(TeamMember.role),
+            selectinload(Team.members)
+            .selectinload(TeamMember.status)
+        )
+    )
+    result = await session.execute(teams_query)
+    teams = result.scalars().all()
+
+    active_teams = [team for team in teams if team.get_status() == "active"]
+    active_teams_count = len(active_teams)
+
+    if active_teams_count >= 20:
+        current_stage_query = select(Stage).where(Stage.is_active == True)
+        current_stage = await session.execute(current_stage_query)
+        current_stage = current_stage.scalar_one_or_none()
+
+        if current_stage and current_stage.type == StageType.REGISTRATION.value:
+            registration_closed_stage_query = (
+                select(Stage)
+                .where(Stage.type == StageType.REGISTRATION_CLOSED.value)
+            )
+            registration_closed_stage = await session.execute(registration_closed_stage_query)
+            registration_closed_stage = registration_closed_stage.scalar_one_or_none()
+
+            if registration_closed_stage:
+                current_stage.is_active = False
+                registration_closed_stage.is_active = True
+                await stage_router_state.initialize(session)
 
     await session.commit()
     return {"message": "Приглашение принято"}
@@ -452,10 +548,12 @@ async def reject_invitation(
         session: AsyncSession = Depends(get_session)
 ):
     """Отклонить приглашение в команду"""
+    await check_stage(session, StageType.REGISTRATION)
+
     query = select(TeamMember).where(
         TeamMember.id == invitation_id,
         TeamMember.user_id == current_user.id,
-        TeamMember.status_id == team_router_state.pending_status_id  # Changed this line
+        TeamMember.status_id == team_router_state.pending_status_id
     )
     invitation = await session.execute(query)
     invitation = invitation.scalar_one_or_none()
@@ -466,7 +564,7 @@ async def reject_invitation(
             detail="Приглашение не найдено"
         )
 
-    invitation.status_id = team_router_state.rejected_status_id  # Changed this line
+    invitation.status_id = team_router_state.rejected_status_id
     await session.commit()
     return {"message": "Приглашение отклонено"}
 
@@ -672,11 +770,11 @@ async def get_mentor_teams(
 
 @router.get("/admin/teams", response_model=PaginatedTeamsResponse)
 async def get_admin_teams(
-    limit: int = Query(default=10, le=50, description="Number of results to return"),
-    offset: int = Query(default=0, description="Number of results to skip"),
-    search: Optional[str] = Query(None, min_length=2, description="Optional search query for team name"),
-    current_user: User = Depends(get_current_user),
-    session: AsyncSession = Depends(get_session)
+        limit: int = Query(default=10, le=50, description="Number of results to return"),
+        offset: int = Query(default=0, description="Number of results to skip"),
+        search: Optional[str] = Query(None, min_length=2, description="Optional search query for team name"),
+        current_user: User = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session)
 ):
     """
     Получение списка всех команд с пагинацией и поиском.
@@ -749,6 +847,7 @@ async def get_admin_teams(
         ],
         "total": total
     }
+
 
 @router.get("/mentor/teams/{team_id}", response_model=TeamResponse)
 async def get_mentor_team(
@@ -874,6 +973,8 @@ async def remove_team_member(
         session: AsyncSession = Depends(get_session)
 ):
     """Удалить участника из команды"""
+    await check_stage(session, StageType.REGISTRATION)
+
     team_query = select(Team).where(Team.id == team_id)
     team = await session.execute(team_query)
     team = team.scalar_one_or_none()
@@ -924,6 +1025,8 @@ async def update_team_logo(
         session: AsyncSession = Depends(get_session)
 ):
     """Обновить логотип команды"""
+    await check_stage(session, StageType.REGISTRATION)
+
     team_query = select(Team).where(Team.id == team_id)
     team = await session.execute(team_query)
     team = team.scalar_one_or_none()
@@ -977,6 +1080,8 @@ async def update_team_info(
         session: AsyncSession = Depends(get_session)
 ):
     """Обновить название и девиз команды"""
+    await check_stage(session, StageType.REGISTRATION)
+
     team_query = select(Team).where(Team.id == team_id)
     team = await session.execute(team_query)
     team = team.scalar_one_or_none()
@@ -1093,6 +1198,8 @@ async def delete_team(
         session: AsyncSession = Depends(get_session)
 ):
     """Удалить команду (только для лидера команды)"""
+    await check_stage(session, StageType.REGISTRATION)
+
     team_query = select(Team).where(Team.id == team_id)
     team = await session.execute(team_query)
     team = team.scalar_one_or_none()
@@ -1144,6 +1251,8 @@ async def leave_team(
         session: AsyncSession = Depends(get_session)
 ):
     """Выйти из команды (недоступно для лидера команды)"""
+    await check_stage(session, StageType.REGISTRATION)
+
     member_query = select(TeamMember).where(
         TeamMember.user_id == current_user.id,
         TeamMember.status_id == team_router_state.accepted_status_id

@@ -12,12 +12,14 @@ from starlette import status
 
 from src.auth.jwt import get_current_user
 from src.db import get_session
-from src.models import User, TeamMember, File as FileModel, UserStatus
+from src.models import User, TeamMember, File as FileModel, UserStatus, Team, Stage
+from src.models.enums import StageType
 from src.models.user import User2Roles, UserStatusHistory, UserStatusType
 from src.schemas.file import FileResponse
 from src.schemas.user import UserResponse, PaginatedUserResponse, ChangeUserStatusRequest, UpdateUserRolesRequest, \
     UpdateUserDocumentsRequest
-from src.utils.router_states import team_router_state, user_router_state, file_router_state
+from src.utils.router_states import team_router_state, user_router_state, file_router_state, stage_router_state
+from src.utils.stage_checker import check_stage
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -81,7 +83,10 @@ async def search_users(
                         .where(
                             TeamMember.user_id == User.id,
                             TeamMember.team_id.in_(current_user_team),
-                            TeamMember.status_id == team_router_state.accepted_status_id,
+                            or_(
+                                TeamMember.status_id == team_router_state.accepted_status_id,
+                                TeamMember.status_id == team_router_state.pending_status_id
+                            )
                         )
                     )
                 )
@@ -362,9 +367,9 @@ async def change_user_status(
         current_user: User = Depends(get_current_user),
         session: AsyncSession = Depends(get_session)
 ):
-    """
-    Изменение статуса пользователя (доступно только для организаторов)
-    """
+    """Изменение статуса пользователя (доступно только для организаторов)"""
+    await check_stage(session, StageType.REGISTRATION)
+
     current_user_query = (
         select(User)
         .options(selectinload(User.user2roles))
@@ -377,7 +382,6 @@ async def change_user_status(
         role.role_id == user_router_state.organizer_role_id
         for role in current_user_with_roles.user2roles
     )
-
     if not is_organizer:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -395,7 +399,6 @@ async def change_user_status(
         )
         .where(User.id == user_id)
     )
-
     result = await session.execute(user_query)
     user = result.scalar_one_or_none()
 
@@ -419,14 +422,57 @@ async def change_user_status(
             detail="Неверный статус"
         )
 
+    old_status_id = user.current_status_id
+
     new_status_history = UserStatusHistory(
         user_id=user.id,
         status_id=status_id,
         comment=status_request.comment
     )
     session.add(new_status_history)
-
     user.current_status_id = status_id
+    await session.flush()
+
+    if (old_status_id != status_id and
+            status_id == user_router_state.approved_status_id):
+
+        teams_query = (
+            select(Team)
+            .options(
+                selectinload(Team.members.and_(
+                    TeamMember.status_id == team_router_state.accepted_status_id
+                ))
+                .selectinload(TeamMember.user)
+                .selectinload(User.current_status),
+                selectinload(Team.members)
+                .selectinload(TeamMember.role),
+                selectinload(Team.members)
+                .selectinload(TeamMember.status)
+            )
+        )
+        result = await session.execute(teams_query)
+        teams = result.scalars().all()
+
+        active_teams = [team for team in teams if team.get_status() == "active"]
+        active_teams_count = len(active_teams)
+
+        if active_teams_count >= 20:
+            current_stage_query = select(Stage).where(Stage.is_active == True)
+            current_stage = await session.execute(current_stage_query)
+            current_stage = current_stage.scalar_one_or_none()
+
+            if current_stage and current_stage.type == StageType.REGISTRATION.value:
+                registration_closed_stage_query = (
+                    select(Stage)
+                    .where(Stage.type == StageType.REGISTRATION_CLOSED.value)
+                )
+                registration_closed_stage = await session.execute(registration_closed_stage_query)
+                registration_closed_stage = registration_closed_stage.scalar_one_or_none()
+
+                if registration_closed_stage:
+                    current_stage.is_active = False
+                    registration_closed_stage.is_active = True
+                    await stage_router_state.initialize(session)
 
     await session.commit()
     await session.refresh(user)
@@ -521,6 +567,8 @@ async def update_current_user(
     Пользователь может обновить свои основные данные и информацию в зависимости от роли
     (participant_info для участников или mentor_info для менторов)
     """
+    await check_stage(session, StageType.REGISTRATION)
+
     user_query = (
         select(User)
         .options(
@@ -599,6 +647,8 @@ async def update_user_documents(
     Обновление документов текущего пользователя (согласие и справка с места учебы/работы).
     Принимает файл и тип документа (consent или certificate).
     """
+    await check_stage(session, StageType.REGISTRATION)
+
     if document_type not in ['consent', 'certificate']:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
