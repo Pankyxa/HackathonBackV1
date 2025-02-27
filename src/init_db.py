@@ -99,7 +99,10 @@ async def init_models(engine: AsyncEngine):
 
         file_formats_data = [
             {"name": FileFormat.PDF.value, "description": "PDF документ"},
-            {"name": FileFormat.IMAGE.value, "description": "Изображение"}
+            {"name": FileFormat.IMAGE.value, "description": "Изображение"},
+            {"name": FileFormat.ZIP.value, "description": "ZIP архив"},
+            {"name": FileFormat.TXT.value, "description": "Текстовый файл"},
+            {"name": FileFormat.MD.value, "description": "Markdown файл"}
         ]
 
         for format_data in file_formats_data:
@@ -118,7 +121,9 @@ async def init_models(engine: AsyncEngine):
             {"name": FileType.CONSENT.value, "description": "Согласие"},
             {"name": FileType.EDUCATION_CERTIFICATE.value, "description": "Сертификат об образовании"},
             {"name": FileType.JOB_CERTIFICATE.value, "description": "Сертификат с места работы"},
-            {"name": FileType.TEAM_LOGO.value, "description": "Логотип команды"}
+            {"name": FileType.TEAM_LOGO.value, "description": "Логотип команды"},
+            {"name": FileType.SOLUTION.value, "description": "Решение задачи (ZIP архив)"},
+            {"name": FileType.DEPLOYMENT.value, "description": "Описание развертывания"}
         ]
 
         for type_data in file_types_data:

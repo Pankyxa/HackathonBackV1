@@ -39,6 +39,10 @@ async def save_file(
         file_type_id = file_router_state.team_logo_type_id
     elif file_type == FileType.JOB_CERTIFICATE:
         file_type_id = file_router_state.job_certificate_type_id
+    elif file_type == FileType.SOLUTION:
+        file_type_id = file_router_state.solution_type_id
+    elif file_type == FileType.DEPLOYMENT:
+        file_type_id = file_router_state.deployment_type_id
     else:
         raise ValueError(f"Неизвестный тип файла: {file_type}")
 
@@ -46,15 +50,42 @@ async def save_file(
     upload_dir = f"{base_dir}/{owner_id}"
     os.makedirs(upload_dir, exist_ok=True)
 
-    file_extension = os.path.splitext(upload_file.filename)[1]
+    file_extension = os.path.splitext(upload_file.filename)[1].lower()
     file_name = f"{uuid.uuid4()}{file_extension}"
     file_path = os.path.join(upload_dir, file_name)
+
+    # Проверка допустимых расширений для каждого типа файла
+    if file_type == FileType.SOLUTION and file_extension != '.zip':
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Для решения допустим только ZIP формат"
+        )
+    elif file_type == FileType.DEPLOYMENT and file_extension not in ['.txt', '.md']:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Для описания развертывания допустимы только TXT или MD форматы"
+        )
 
     async with aiofiles.open(file_path, 'wb') as out_file:
         content = await upload_file.read()
         await out_file.write(content)
 
-    file_format_id = file_router_state.pdf_format_id if file_extension.lower() == '.pdf' else file_router_state.image_format_id
+    # Определение формата файла
+    if file_extension == '.pdf':
+        file_format_id = file_router_state.pdf_format_id
+    elif file_extension in ['.jpg', '.jpeg', '.png']:
+        file_format_id = file_router_state.image_format_id
+    elif file_extension == '.zip':
+        file_format_id = file_router_state.zip_format_id
+    elif file_extension == '.txt':
+        file_format_id = file_router_state.txt_format_id
+    elif file_extension == '.md':
+        file_format_id = file_router_state.md_format_id
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Неподдерживаемый формат файла: {file_extension}"
+        )
 
     file_model = FileModel(
         id=uuid.uuid4(),

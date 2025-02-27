@@ -21,7 +21,7 @@ from src.schemas.team import TeamCreate, TeamResponse, TeamMemberResponse, TeamM
     TeamMembersResponse, TeamMemberDetailResponse, TeamStatusDetails, PaginatedTeamsResponse
 from src.auth.jwt import get_current_user
 from src.routers.auth import save_file
-from src.utils.router_states import team_router_state, user_router_state
+from src.utils.router_states import team_router_state, user_router_state, file_router_state
 
 router = APIRouter(prefix="/teams", tags=["teams"])
 
@@ -774,13 +774,21 @@ async def get_mentor_team(
         for role in user_roles
     )
 
-    if not (is_mentor or is_admin):
+    member_query = select(TeamMember).where(
+        TeamMember.team_id == team_id,
+        TeamMember.user_id == current_user.id,
+        TeamMember.status_id == team_router_state.accepted_status_id
+    )
+    is_team_member = await session.execute(member_query)
+    is_team_member = is_team_member.scalar_one_or_none()
+
+    if not (is_mentor or is_admin or is_team_member):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Доступ разрешен только для менторов"
         )
 
-    if not is_admin:
+    if not (is_admin or is_team_member):
         mentor_check_query = select(TeamMember).where(
             TeamMember.team_id == team_id,
             TeamMember.user_id == current_user.id,
@@ -1167,3 +1175,266 @@ async def leave_team(
     await session.commit()
 
     return {"message": "Вы успешно вышли из команды"}
+
+
+@router.post("/{team_id}/solution")
+async def upload_team_solution(
+    team_id: uuid.UUID,
+    solution_file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session)
+):
+    """Загрузка ZIP файла с решением команды"""
+    # Проверяем существование команды
+    team_query = select(Team).where(Team.id == team_id)
+    team = await session.execute(team_query)
+    team = team.scalar_one_or_none()
+
+    if not team:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Команда не найдена"
+        )
+
+    # Проверяем, является ли пользователь членом команды
+    member_query = select(TeamMember).where(
+        TeamMember.team_id == team_id,
+        TeamMember.user_id == current_user.id,
+        TeamMember.status_id == team_router_state.accepted_status_id
+    )
+    member = await session.execute(member_query)
+    member = member.scalar_one_or_none()
+
+    if not member:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Вы не являетесь участником этой команды"
+        )
+
+    # Проверяем расширение файла
+    if not solution_file.filename.lower().endswith('.zip'):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Файл решения должен быть в формате ZIP"
+        )
+
+    # Удаляем предыдущее решение, если оно существует
+    existing_solution_query = select(DBFile).where(
+        DBFile.team_id == team_id,
+        DBFile.file_type_id == file_router_state.solution_type_id
+    )
+    existing_solution = await session.execute(existing_solution_query)
+    existing_solution = existing_solution.scalar_one_or_none()
+
+    if existing_solution:
+        if os.path.exists(existing_solution.file_path):
+            os.remove(existing_solution.file_path)
+        await session.delete(existing_solution)
+        await session.flush()
+
+    # Сохраняем новое решение
+    solution_file_model = await save_file(
+        upload_file=solution_file,
+        owner_id=team_id,
+        file_type=FileType.SOLUTION,
+        owner_type=FileOwnerType.TEAM
+    )
+
+    session.add(solution_file_model)
+    await session.commit()
+    await session.refresh(solution_file_model)
+
+    return solution_file_model
+
+
+@router.post("/{team_id}/deployment")
+async def upload_team_deployment(
+    team_id: uuid.UUID,
+    deployment_file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session)
+):
+    """Загрузка файла с описанием развертывания (TXT или MD)"""
+    # Проверяем существование команды
+    team_query = select(Team).where(Team.id == team_id)
+    team = await session.execute(team_query)
+    team = team.scalar_one_or_none()
+
+    if not team:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Команда не найдена"
+        )
+
+    # Проверяем, является ли пользователь членом команды
+    member_query = select(TeamMember).where(
+        TeamMember.team_id == team_id,
+        TeamMember.user_id == current_user.id,
+        TeamMember.status_id == team_router_state.accepted_status_id
+    )
+    member = await session.execute(member_query)
+    member = member.scalar_one_or_none()
+
+    if not member:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Вы не являетесь участником этой команды"
+        )
+
+    # Проверяем расширение файла
+    file_ext = os.path.splitext(deployment_file.filename.lower())[1]
+    if file_ext not in ['.txt', '.md']:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Файл описания должен быть в формате TXT или MD"
+        )
+
+    # Удаляем предыдущее описание, если оно существует
+    existing_deployment_query = select(DBFile).where(
+        DBFile.team_id == team_id,
+        DBFile.file_type_id == file_router_state.deployment_type_id
+    )
+    existing_deployment = await session.execute(existing_deployment_query)
+    existing_deployment = existing_deployment.scalar_one_or_none()
+
+    if existing_deployment:
+        if os.path.exists(existing_deployment.file_path):
+            os.remove(existing_deployment.file_path)
+        await session.delete(existing_deployment)
+        await session.flush()
+
+    # Сохраняем новое описание
+    deployment_file_model = await save_file(
+        upload_file=deployment_file,
+        owner_id=team_id,
+        file_type=FileType.DEPLOYMENT,
+        owner_type=FileOwnerType.TEAM
+    )
+
+    session.add(deployment_file_model)
+    await session.commit()
+    await session.refresh(deployment_file_model)
+
+    return deployment_file_model
+
+
+@router.get("/{team_id}/solution")
+async def get_team_solution(
+    team_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session)
+):
+    """Получить файл решения команды"""
+    # Проверяем существование команды
+    team_query = select(Team).where(Team.id == team_id)
+    team = await session.execute(team_query)
+    team = team.scalar_one_or_none()
+
+    if not team:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Команда не найдена"
+        )
+
+    # Проверяем права доступа
+    member_query = select(TeamMember).where(
+        TeamMember.team_id == team_id,
+        TeamMember.user_id == current_user.id,
+        TeamMember.status_id == team_router_state.accepted_status_id
+    )
+    is_member = await session.execute(member_query)
+    is_member = is_member.scalar_one_or_none()
+
+    user_roles_query = select(User2Roles).where(User2Roles.user_id == current_user.id)
+    user_roles = await session.execute(user_roles_query)
+    user_roles = user_roles.scalars().all()
+
+    is_admin = any(role.role_id == user_router_state.admin_role_id for role in user_roles)
+    is_organizer = any(role.role_id == user_router_state.organizer_role_id for role in user_roles)
+
+    if not (is_member or is_admin or is_organizer):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="У вас нет доступа к файлам этой команды"
+        )
+
+    # Получаем файл решения
+    solution_query = select(DBFile).where(
+        DBFile.team_id == team_id,
+        DBFile.file_type_id == file_router_state.solution_type_id
+    )
+    solution = await session.execute(solution_query)
+    solution = solution.scalar_one_or_none()
+
+    if not solution or not os.path.exists(solution.file_path):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Файл решения не найден"
+        )
+
+    return FileResponse(
+        path=solution.file_path,
+        filename=solution.filename,
+        media_type="application/zip"
+    )
+
+
+@router.get("/{team_id}/deployment")
+async def get_team_deployment(
+    team_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session)
+):
+    """Получить файл описания развертывания команды"""
+    # Проверяем существование команды
+    team_query = select(Team).where(Team.id == team_id)
+    team = await session.execute(team_query)
+    team = team.scalar_one_or_none()
+
+    if not team:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Команда не найдена"
+        )
+
+    # Проверяем права доступа
+    member_query = select(TeamMember).where(
+        TeamMember.team_id == team_id,
+        TeamMember.user_id == current_user.id,
+        TeamMember.status_id == team_router_state.accepted_status_id
+    )
+    is_member = await session.execute(member_query)
+    is_member = is_member.scalar_one_or_none()
+
+    user_roles_query = select(User2Roles).where(User2Roles.user_id == current_user.id)
+    user_roles = await session.execute(user_roles_query)
+    user_roles = user_roles.scalars().all()
+
+    is_admin = any(role.role_id == user_router_state.admin_role_id for role in user_roles)
+    is_organizer = any(role.role_id == user_router_state.organizer_role_id for role in user_roles)
+
+    if not (is_member or is_admin or is_organizer):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="У вас нет доступа к файлам этой команды"
+        )
+
+    # Получаем файл описания
+    deployment_query = select(DBFile).where(
+        DBFile.team_id == team_id,
+        DBFile.file_type_id == file_router_state.deployment_type_id
+    )
+    deployment = await session.execute(deployment_query)
+    deployment = deployment.scalar_one_or_none()
+
+    if not deployment or not os.path.exists(deployment.file_path):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Файл описания развертывания не найден"
+        )
+
+    return FileResponse(
+        path=deployment.file_path,
+        filename=deployment.filename,
+        media_type="text/plain" if deployment.filename.endswith('.txt') else "text/markdown"
+    )
