@@ -1,5 +1,4 @@
 version: "3.9"
-
 services:
   hackathon:
     build:
@@ -11,6 +10,9 @@ services:
       - "3000:3000"
     volumes:
       - .:/app
+    networks:
+      - backend-network
+      - hackathon-network  # добавляем общую сеть
 
   database:
     image: postgres:latest
@@ -24,6 +26,15 @@ services:
       - "5432:5432"
     volumes:
       - db_data:/var/lib/postgresql/data
+    networks:
+      - backend-network
+
+networks:
+  backend-network:
+    driver: bridge
+  hackathon-network:  # определяем общую сеть
+    driver: bridge
+    name: hackathon-network  # фиксированное имя для общей сети
 
 volumes:
   db_data:
