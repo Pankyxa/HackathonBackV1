@@ -18,6 +18,7 @@ from src.models.user import User2Roles, UserStatusHistory, UserStatusType
 from src.schemas.file import FileResponse
 from src.schemas.user import UserResponse, PaginatedUserResponse, ChangeUserStatusRequest, UpdateUserRolesRequest, \
     UpdateUserDocumentsRequest
+from src.utils.email_utils import send_test_email
 from src.utils.router_states import team_router_state, user_router_state, file_router_state, stage_router_state
 from src.utils.stage_checker import check_stage
 
@@ -789,4 +790,20 @@ async def update_user_documents(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Ошибка при обновлении документов пользователя"
+        )
+
+@router.post("/test-email")
+async def test_email(
+        current_user: User = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session)
+):
+    """
+    Тестовый эндпоинт для отправки email
+    """
+    if send_test_email():
+        return {"message": "Email отправлен успешно"}
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Ошибка при отправке email"
         )
