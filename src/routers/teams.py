@@ -54,6 +54,7 @@ async def create_team(
         team_motto: str = Form(...),
         member_ids: str = Form(default="[]"),
         logo: UploadFile = UploadFile(...),
+        background_tasks: BackgroundTasks = BackgroundTasks(),
         current_user: User = Depends(get_current_user),
         session: AsyncSession = Depends(get_session)
 ):
@@ -152,6 +153,22 @@ async def create_team(
 
         if team_members:
             session.add_all(team_members)
+
+        invited_users_query = (
+            select(User)
+            .where(User.id.in_(member_ids_list))
+            .where(User.id != current_user.id)
+        )
+        result = await session.execute(invited_users_query)
+        invited_users = result.scalars().all()
+
+        # Добавляем задачи отправки email для каждого приглашенного участника
+        for invited_user in invited_users:
+            background_tasks.add_task(
+                send_team_invitation_email,
+                user=invited_user,
+                team=team
+            )
 
     await session.commit()
 
