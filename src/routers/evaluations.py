@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -71,8 +72,8 @@ async def create_evaluation(
         existing_evaluation.criterion_3 = evaluation.criterion_3
         existing_evaluation.criterion_4 = evaluation.criterion_4
         existing_evaluation.criterion_5 = evaluation.criterion_5
-        await session.flush()
-        await session.refresh(existing_evaluation)
+        existing_evaluation.updated_at = datetime.utcnow()
+        await session.commit()
 
         return TeamEvaluationResponse(
             id=existing_evaluation.id,
