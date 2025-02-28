@@ -874,6 +874,11 @@ async def get_mentor_team(
         for role in user_roles
     )
 
+    is_judge = any(
+        role.role_id == user_router_state.judge_role_id
+        for role in user_roles
+    )
+
     member_query = select(TeamMember).where(
         TeamMember.team_id == team_id,
         TeamMember.user_id == current_user.id,
@@ -882,13 +887,13 @@ async def get_mentor_team(
     is_team_member = await session.execute(member_query)
     is_team_member = is_team_member.scalar_one_or_none()
 
-    if not (is_mentor or is_admin or is_team_member):
+    if not (is_mentor or is_admin or is_team_member or is_judge):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Доступ разрешен только для менторов"
         )
 
-    if not (is_admin or is_team_member):
+    if not (is_admin or is_team_member or is_judge):
         mentor_check_query = select(TeamMember).where(
             TeamMember.team_id == team_id,
             TeamMember.user_id == current_user.id,
@@ -1453,8 +1458,9 @@ async def get_team_solution(
 
     is_admin = any(role.role_id == user_router_state.admin_role_id for role in user_roles)
     is_organizer = any(role.role_id == user_router_state.organizer_role_id for role in user_roles)
+    is_judge = any(role.role_id == user_router_state.judge_role_id for role in user_roles)
 
-    if not (is_member or is_admin or is_organizer):
+    if not (is_member or is_admin or is_organizer or is_judge):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="У вас нет доступа к файлам этой команды"
@@ -1511,8 +1517,9 @@ async def get_team_deployment(
 
     is_admin = any(role.role_id == user_router_state.admin_role_id for role in user_roles)
     is_organizer = any(role.role_id == user_router_state.organizer_role_id for role in user_roles)
+    is_judge = any(role.role_id == user_router_state.judge_role_id for role in user_roles)
 
-    if not (is_member or is_admin or is_organizer):
+    if not (is_member or is_admin or is_organizer or is_judge):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="У вас нет доступа к файлам этой команды"

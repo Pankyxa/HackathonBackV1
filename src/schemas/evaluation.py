@@ -11,14 +11,17 @@ class TeamEvaluationBase(BaseModel):
     criterion_3: int = Field(..., ge=0, le=10, description="Проработанность технического решения")
     criterion_4: int = Field(..., ge=0, le=10, description="Эффективность предложенного решения")
     criterion_5: int = Field(..., ge=0, le=10, description="Качество выступления")
+
+
 class TeamEvaluationCreate(TeamEvaluationBase):
     team_id: UUID
-
 
 
 class TeamEvaluationResponse(TeamEvaluationBase):
     id: UUID
     team_id: UUID
+    team_name: str
+    team_motto: str
     judge_id: UUID
     created_at: datetime
     updated_at: Optional[datetime]
@@ -41,6 +44,6 @@ class TeamTotalScore(BaseModel):
 
 
 class UnevaluatedTeam(BaseModel):
-    id: UUID
+    team_id: UUID
     team_name: str
     team_motto: str
