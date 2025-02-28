@@ -9,7 +9,6 @@ POSTGRES_DB=your_database
 SMTP_HOST=your-smtp-server
 SMTP_PORT=25
 SMTP_SENDER=your-sender@domain.com
-SMTP_RECIPIENT=recipient@domain.com
 ```
 
 ### Запуск приложения
@@ -19,4 +18,5 @@ docker-compose up --build
 ```
 
 ### После запуска контейнеров
-Запустить файл /src/init_database.py (пока так, потом добавлю, чтоб он автоматически прогонялся при запуске)
+На винде потанцевать с бубнами меняв в .env host с database на localhost и обратно.
+На линуксе/маке радоваться жизни
