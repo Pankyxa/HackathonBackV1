@@ -1,7 +1,7 @@
 import os
 import uuid
 
-from fastapi import APIRouter, Depends, Query, HTTPException, Form, UploadFile, File
+from fastapi import APIRouter, Depends, Query, HTTPException, Form, UploadFile, File, BackgroundTasks
 from pathlib import Path
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_, and_, not_, exists, func, delete
@@ -18,6 +18,7 @@ from src.models.user import User2Roles, UserStatusHistory, UserStatusType
 from src.schemas.file import FileResponse
 from src.schemas.user import UserResponse, PaginatedUserResponse, ChangeUserStatusRequest, UpdateUserRolesRequest, \
     UpdateUserDocumentsRequest
+from src.utils.background_tasks import notify_active_teams
 from src.utils.router_states import team_router_state, user_router_state, file_router_state, stage_router_state
 from src.utils.stage_checker import check_stage
 
@@ -365,6 +366,7 @@ async def change_user_status(
         user_id: uuid.UUID,
         status_request: ChangeUserStatusRequest,
         current_user: User = Depends(get_current_user),
+        background_tasks: BackgroundTasks = BackgroundTasks(),
         session: AsyncSession = Depends(get_session)
 ):
     """Изменение статуса пользователя (доступно только для организаторов)"""
@@ -473,6 +475,8 @@ async def change_user_status(
                     current_stage.is_active = False
                     registration_closed_stage.is_active = True
                     await stage_router_state.initialize(session)
+
+                    background_tasks.add_task(notify_active_teams, session)
 
     await session.commit()
     await session.refresh(user)

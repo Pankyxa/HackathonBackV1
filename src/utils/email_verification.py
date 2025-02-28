@@ -23,19 +23,77 @@ async def create_verification_token(user_id: uuid.UUID, session: AsyncSession) -
 async def send_verification_email(user_email: str, user_name: str, token: str):
     """Отправляет email со ссылкой для подтверждения"""
     verification_url = f"{settings.base_url}/auth/verify-email/{token}"
-    
+
     html_content = f"""
     <html>
+        <head>
+            <style>
+                body {{
+                    font-family: Arial, sans-serif;
+                    line-height: 1.6;
+                    color: #333333;
+                    max-width: 600px;
+                    margin: 0 auto;
+                    padding: 20px;
+                }}
+                .container {{
+                    background-color: #ffffff;
+                    border-radius: 8px;
+                    padding: 30px;
+                    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+                }}
+                .header {{
+                    text-align: center;
+                    margin-bottom: 30px;
+                }}
+                .title {{
+                    color: #2196F3;
+                    font-size: 24px;
+                    margin: 0;
+                }}
+                .button {{
+                    display: inline-block;
+                    background-color: #2196F3;
+                    color: white;
+                    text-decoration: none;
+                    padding: 12px 24px;
+                    border-radius: 4px;
+                    margin: 20px 0;
+                }}
+                .footer {{
+                    font-size: 14px;
+                    color: #666666;
+                    margin-top: 30px;
+                    text-align: center;
+                }}
+            </style>
+        </head>
         <body>
-            <h2>Здравствуйте, {user_name}!</h2>
-            <p>Для подтверждения вашего email адреса, пожалуйста, перейдите по следующей ссылке:</p>
-            <p><a href="{verification_url}">{verification_url}</a></p>
-            <p>Ссылка действительна в течение {VERIFICATION_TOKEN_EXPIRE_HOURS} часов.</p>
-            <p>Если вы не регистрировались на нашем сайте, просто проигнорируйте это письмо.</p>
+            <div class="container">
+                <div class="header">
+                    <h1 class="title">Подтверждение email адреса</h1>
+                </div>
+                
+                <p>Здравствуйте, {user_name}!</p>
+                
+                <p>Для подтверждения вашего email адреса, пожалуйста, нажмите на кнопку ниже:</p>
+                
+                <div style="text-align: center;">
+                    <a href="{verification_url}" class="button">Подтвердить email</a>
+                </div>
+                
+                <p>Или перейдите по ссылке:</p>
+                <p><a href="{verification_url}">{verification_url}</a></p>
+                
+                <div class="footer">
+                    <p>Ссылка действительна в течение {VERIFICATION_TOKEN_EXPIRE_HOURS} часов.</p>
+                    <p>Если вы не регистрировались на нашем сайте, просто проигнорируйте это письмо.</p>
+                </div>
+            </div>
         </body>
     </html>
     """
-    
+
     return email_sender.send_email(
         to_email=user_email,
         subject="Подтверждение email адреса",

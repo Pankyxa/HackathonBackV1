@@ -21,6 +21,10 @@ from src.schemas.team import TeamCreate, TeamResponse, TeamMemberResponse, TeamM
     TeamMembersResponse, TeamMemberDetailResponse, TeamStatusDetails, PaginatedTeamsResponse
 from src.auth.jwt import get_current_user
 from src.routers.auth import save_file
+from src.settings import settings
+from fastapi import BackgroundTasks
+from src.utils.background_tasks import notify_active_teams
+from src.utils.email_utils import email_sender
 from src.utils.router_states import team_router_state, user_router_state, stage_router_state
 from src.utils.stage_checker import check_stage
 from src.utils.router_states import team_router_state, user_router_state, file_router_state
@@ -330,7 +334,13 @@ async def invite_team_member(
             detail="Только лидер команды может приглашать участников"
         )
 
-    user_query = select(User).where(User.id == member_data.user_id)
+    user_query = (
+        select(User)
+        .options(
+            selectinload(User.current_status)
+        )
+        .where(User.id == member_data.user_id)
+    )
     user = await session.execute(user_query)
     user = user.scalar_one_or_none()
     if not user:
@@ -374,6 +384,82 @@ async def invite_team_member(
     session.add(team_member)
     await session.commit()
     await session.refresh(team_member)
+
+    html_content = f"""
+    <html>
+        <head>
+            <style>
+                body {{
+                    font-family: Arial, sans-serif;
+                    line-height: 1.6;
+                    color: #333333;
+                    max-width: 600px;
+                    margin: 0 auto;
+                    padding: 20px;
+                }}
+                .container {{
+                    background-color: #ffffff;
+                    border-radius: 8px;
+                    padding: 30px;
+                    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+                }}
+                .header {{
+                    text-align: center;
+                    margin-bottom: 30px;
+                }}
+                .title {{
+                    color: #2196F3;
+                    font-size: 24px;
+                    margin: 0;
+                }}
+                .button {{
+                    display: inline-block;
+                    background-color: #2196F3;
+                    color: white;
+                    text-decoration: none;
+                    padding: 12px 24px;
+                    border-radius: 4px;
+                    margin: 20px 0;
+                }}
+                .footer {{
+                    font-size: 14px;
+                    color: #666666;
+                    margin-top: 30px;
+                    text-align: center;
+                }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="header">
+                    <h1 class="title">Приглашение в команду</h1>
+                </div>
+
+                <p>Здравствуйте, {user.full_name}!</p>
+
+                <p>Вас приглашают присоединиться к команде "{team.team_name}".</p>
+
+                <div style="text-align: center;">
+                    <a href="{settings.base_url}/profile" class="button">Перейти в личный кабинет</a>
+                </div>
+
+                <p>В личном кабинете вы сможете принять или отклонить приглашение.</p>
+
+                <div class="footer">
+                    <p>Если вы не регистрировались на нашем сайте, просто проигнорируйте это письмо.</p>
+                </div>
+            </div>
+        </body>
+    </html>
+    """
+
+    email_sender.send_email(
+        to_email=user.email,
+        subject="Приглашение в команду",
+        body=html_content,
+        is_html=True
+    )
+
     return team_member
 
 
@@ -424,6 +510,7 @@ async def get_pending_invitations(
 async def accept_invitation(
         invitation_id: uuid.UUID,
         current_user: User = Depends(get_current_user),
+        background_tasks: BackgroundTasks = BackgroundTasks(),
         session: AsyncSession = Depends(get_session)
 ):
     """Принять приглашение в команду"""
@@ -537,6 +624,8 @@ async def accept_invitation(
                 current_stage.is_active = False
                 registration_closed_stage.is_active = True
                 await stage_router_state.initialize(session)
+
+                background_tasks.add_task(notify_active_teams, session)
 
     await session.commit()
     return {"message": "Приглашение принято"}
@@ -1294,10 +1383,10 @@ async def leave_team(
 
 @router.post("/{team_id}/solution")
 async def upload_team_solution(
-    team_id: uuid.UUID,
-    solution_file: UploadFile = File(...),
-    current_user: User = Depends(get_current_user),
-    session: AsyncSession = Depends(get_session)
+        team_id: uuid.UUID,
+        solution_file: UploadFile = File(...),
+        current_user: User = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session)
 ):
     """Загрузка ZIP файла с решением команды"""
     await check_stage(session, [StageType.TASK_DISTRIBUTION, StageType.SOLUTION_SUBMISSION])
@@ -1361,10 +1450,10 @@ async def upload_team_solution(
 
 @router.post("/{team_id}/deployment")
 async def upload_team_deployment(
-    team_id: uuid.UUID,
-    deployment_file: UploadFile = File(...),
-    current_user: User = Depends(get_current_user),
-    session: AsyncSession = Depends(get_session)
+        team_id: uuid.UUID,
+        deployment_file: UploadFile = File(...),
+        current_user: User = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session)
 ):
     """Загрузка файла с описанием развертывания (TXT или MD)"""
     await check_stage(session, [StageType.TASK_DISTRIBUTION, StageType.SOLUTION_SUBMISSION])
@@ -1429,9 +1518,9 @@ async def upload_team_deployment(
 
 @router.get("/{team_id}/solution")
 async def get_team_solution(
-    team_id: uuid.UUID,
-    current_user: User = Depends(get_current_user),
-    session: AsyncSession = Depends(get_session)
+        team_id: uuid.UUID,
+        current_user: User = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session)
 ):
     """Получить файл решения команды"""
     team_query = select(Team).where(Team.id == team_id)
@@ -1488,9 +1577,9 @@ async def get_team_solution(
 
 @router.get("/{team_id}/deployment")
 async def get_team_deployment(
-    team_id: uuid.UUID,
-    current_user: User = Depends(get_current_user),
-    session: AsyncSession = Depends(get_session)
+        team_id: uuid.UUID,
+        current_user: User = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session)
 ):
     """Получить файл описания развертывания команды"""
     team_query = select(Team).where(Team.id == team_id)
