@@ -18,7 +18,7 @@ from src.models.user import User2Roles, UserStatusHistory, UserStatusType
 from src.schemas.file import FileResponse
 from src.schemas.user import UserResponse, PaginatedUserResponse, ChangeUserStatusRequest, UpdateUserRolesRequest, \
     UpdateUserDocumentsRequest
-from src.utils.background_tasks import notify_active_teams
+from src.utils.background_tasks import notify_active_teams, send_status_change_email
 from src.utils.router_states import team_router_state, user_router_state, file_router_state, stage_router_state
 from src.utils.stage_checker import check_stage
 
@@ -434,6 +434,13 @@ async def change_user_status(
     session.add(new_status_history)
     user.current_status_id = status_id
     await session.flush()
+
+    background_tasks.add_task(
+        send_status_change_email,
+        user=user,
+        new_status=status_request.status.value,
+        comment=status_request.comment
+    )
 
     if (old_status_id != status_id and
             status_id == user_router_state.approved_status_id):

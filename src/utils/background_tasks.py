@@ -272,3 +272,103 @@ async def send_registration_confirmation_email(user: User, confirmation_link: st
         body=html_content,
         is_html=True
     )
+
+
+async def send_status_change_email(user: User, new_status: str, comment: str = None):
+    """Отправляет email с уведомлением об изменении статуса пользователя"""
+
+    status_descriptions = {
+        "PENDING": "на рассмотрении",
+        "APPROVED": "одобрен",
+        "NEED_UPDATE": "требует обновления"
+    }
+
+    status_text = status_descriptions.get(new_status, new_status)
+
+    comment_block = ""
+    if comment:
+        comment_block = f"""
+        <tr>
+            <td align="center" style="padding: 20px 0; background-color: #f5f5f5; border-radius: 4px;">
+                <h3 style="margin: 0 0 10px 0;">Комментарий:</h3>
+                <p style="margin: 0;">{comment}</p>
+            </td>
+        </tr>
+        """
+
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+        <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        </head>
+        <body style="margin: 0; padding: 0; background-color: #f5f5f5;">
+            <table border="0" cellpadding="0" cellspacing="0" width="100%" style="font-family: Arial, sans-serif;">
+                <tr>
+                    <td align="center" style="padding: 20px 0;">
+                        <table border="0" cellpadding="0" cellspacing="0" width="600" style="background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);">
+                            <tr>
+                                <td align="center" style="padding: 40px 30px;">
+                                    <!-- Header -->
+                                    <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin-bottom: 30px;">
+                                        <tr>
+                                            <td align="center">
+                                                <h1 style="color: #2196F3; font-size: 24px; margin: 0;">Изменение статуса участника</h1>
+                                            </td>
+                                        </tr>
+                                    </table>
+
+                                    <!-- Content -->
+                                    <table border="0" cellpadding="0" cellspacing="0" width="100%">
+                                        <tr>
+                                            <td align="center" style="padding: 0 0 20px 0;">
+                                                <p style="margin: 0;">Здравствуйте, {user.full_name}!</p>
+                                            </td>
+                                        </tr>
+                                        <tr>
+                                            <td align="center" style="padding: 0 0 20px 0;">
+                                                <p style="margin: 0;">Ваш статус участника был изменен на "{status_text}".</p>
+                                            </td>
+                                        </tr>
+                                        {comment_block}
+                                        <tr>
+                                            <td align="center" style="padding: 20px 0;">
+                                                <table border="0" cellpadding="0" cellspacing="0">
+                                                    <tr>
+                                                        <td align="center" bgcolor="#2196F3" style="border-radius: 4px;">
+                                                            <a href="{settings.base_url}/profile" 
+                                                               style="display: inline-block; padding: 12px 24px; color: #ffffff; text-decoration: none; font-weight: bold;">
+                                                                Перейти в личный кабинет
+                                                            </a>
+                                                        </td>
+                                                    </tr>
+                                                </table>
+                                            </td>
+                                        </tr>
+                                    </table>
+
+                                    <!-- Footer -->
+                                    <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin-top: 30px;">
+                                        <tr>
+                                            <td align="center" style="color: #666666; font-size: 14px;">
+                                                <p style="margin: 0;">Это автоматическое уведомление, пожалуйста, не отвечайте на него.</p>
+                                            </td>
+                                        </tr>
+                                    </table>
+                                </td>
+                            </tr>
+                        </table>
+                    </td>
+                </tr>
+            </table>
+        </body>
+    </html>
+    """
+
+    email_sender.send_email(
+        to_email=user.email,
+        subject="Изменение статуса участника",
+        body=html_content,
+        is_html=True
+    )
