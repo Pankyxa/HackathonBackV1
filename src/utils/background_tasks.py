@@ -30,6 +30,7 @@ async def send_team_confirmation_email(team: Team, members: List[User]):
                     border-radius: 8px;
                     padding: 30px;
                     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+                    text-align: center;
                 }}
                 .header {{
                     text-align: center;
@@ -135,6 +136,7 @@ async def send_team_invitation_email(user: User, team: Team):
                     border-radius: 8px;
                     padding: 30px;
                     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+                    text-align: center;
                 }}
                 .header {{
                     text-align: center;
@@ -216,6 +218,7 @@ async def send_registration_confirmation_email(user: User, confirmation_link: st
                     border-radius: 8px;
                     padding: 30px;
                     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+                    text-align: center;
                 }}
                 .header {{
                     text-align: center;
