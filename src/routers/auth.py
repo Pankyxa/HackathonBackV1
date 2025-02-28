@@ -537,3 +537,45 @@ async def resend_verification_email(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Ошибка при отправке письма"
         )
+
+
+@router.post("/test-email")
+async def send_test_email(
+        email: str = Form(...),
+        session: AsyncSession = Depends(get_session)
+):
+    """
+    Отправка тестового письма на указанный email.
+    Используется для проверки работы системы отправки писем.
+    """
+    try:
+        test_user = User(
+            id=uuid.uuid4(),
+            email=email,
+            password="test",
+            full_name="Test User",
+            current_status_id=user_router_state.pending_status_id,
+        )
+
+        verification_token = EmailVerificationToken(
+            user_id=test_user.id,
+            token=str(uuid.uuid4()),
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=24)
+        )
+
+        if await send_verification_email(email, "Test User", verification_token.token):
+            return {
+                "message": "Тестовое письмо успешно отправлено",
+                "email": email
+            }
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Ошибка при отправке тестового письма"
+            )
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Ошибка при отправке тестового письма: {str(e)}"
+        )
