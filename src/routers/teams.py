@@ -23,7 +23,7 @@ from src.auth.jwt import get_current_user
 from src.routers.auth import save_file
 from src.settings import settings
 from fastapi import BackgroundTasks
-from src.utils.background_tasks import notify_active_teams
+from src.utils.background_tasks import notify_active_teams, send_team_invitation_email
 from src.utils.email_utils import email_sender
 from src.utils.router_states import team_router_state, user_router_state, stage_router_state
 from src.utils.stage_checker import check_stage
@@ -185,6 +185,7 @@ async def create_team(
 async def invite_team_mentor(
         team_id: uuid.UUID,
         mentor_id: UUID,
+        background_tasks: BackgroundTasks,
         current_user: User = Depends(get_current_user),
         session: AsyncSession = Depends(get_session)
 ):
@@ -294,6 +295,8 @@ async def invite_team_mentor(
     await session.commit()
     await session.refresh(team_member)
 
+    background_tasks.add_task(send_team_invitation_email, mentor, team)
+
     return team_member
 
 
@@ -301,6 +304,7 @@ async def invite_team_mentor(
 async def invite_team_member(
         team_id: uuid.UUID,
         member_data: TeamMemberCreate,
+        background_tasks: BackgroundTasks,
         current_user: User = Depends(get_current_user),
         session: AsyncSession = Depends(get_session)
 ):
@@ -372,6 +376,9 @@ async def invite_team_member(
             existing_member.role_id = get_role_id(member_data.role)
             await session.commit()
             await session.refresh(existing_member)
+
+            background_tasks.add_task(send_team_invitation_email, user, team)
+
             return existing_member
 
     team_member = TeamMember(
@@ -385,80 +392,7 @@ async def invite_team_member(
     await session.commit()
     await session.refresh(team_member)
 
-    html_content = f"""
-    <html>
-        <head>
-            <style>
-                body {{
-                    font-family: Arial, sans-serif;
-                    line-height: 1.6;
-                    color: #333333;
-                    max-width: 600px;
-                    margin: 0 auto;
-                    padding: 20px;
-                }}
-                .container {{
-                    background-color: #ffffff;
-                    border-radius: 8px;
-                    padding: 30px;
-                    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-                }}
-                .header {{
-                    text-align: center;
-                    margin-bottom: 30px;
-                }}
-                .title {{
-                    color: #2196F3;
-                    font-size: 24px;
-                    margin: 0;
-                }}
-                .button {{
-                    display: inline-block;
-                    background-color: #2196F3;
-                    color: white;
-                    text-decoration: none;
-                    padding: 12px 24px;
-                    border-radius: 4px;
-                    margin: 20px 0;
-                }}
-                .footer {{
-                    font-size: 14px;
-                    color: #666666;
-                    margin-top: 30px;
-                    text-align: center;
-                }}
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <div class="header">
-                    <h1 class="title">Приглашение в команду</h1>
-                </div>
-
-                <p>Здравствуйте, {user.full_name}!</p>
-
-                <p>Вас приглашают присоединиться к команде "{team.team_name}".</p>
-
-                <div style="text-align: center;">
-                    <a href="{settings.base_url}/profile" class="button">Перейти в личный кабинет</a>
-                </div>
-
-                <p>В личном кабинете вы сможете принять или отклонить приглашение.</p>
-
-                <div class="footer">
-                    <p>Если вы не регистрировались на нашем сайте, просто проигнорируйте это письмо.</p>
-                </div>
-            </div>
-        </body>
-    </html>
-    """
-
-    email_sender.send_email(
-        to_email=user.email,
-        subject="Приглашение в команду",
-        body=html_content,
-        is_html=True
-    )
+    background_tasks.add_task(send_team_invitation_email, user, team)
 
     return team_member
 
