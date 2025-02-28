@@ -23,6 +23,7 @@ async def send_team_confirmation_email(team: Team, members: List[User]):
                     max-width: 600px;
                     margin: 0 auto;
                     padding: 20px;
+                    text-align: center; 
                 }}
                 .container {{
                     background-color: #ffffff;
@@ -127,6 +128,7 @@ async def send_team_invitation_email(user: User, team: Team):
                     max-width: 600px;
                     margin: 0 auto;
                     padding: 20px;
+                    text-align: center; 
                 }}
                 .container {{
                     background-color: #ffffff;
@@ -187,6 +189,85 @@ async def send_team_invitation_email(user: User, team: Team):
     email_sender.send_email(
         to_email=user.email,
         subject="Приглашение в команду",
+        body=html_content,
+        is_html=True
+    )
+
+
+async def send_registration_confirmation_email(user: User, confirmation_link: str):
+    """Отправляет email с подтверждением регистрации"""
+    await asyncio.sleep(10)
+
+    html_content = f"""
+    <html>
+        <head>
+            <style>
+                body {{
+                    font-family: Arial, sans-serif;
+                    line-height: 1.6;
+                    color: #333333;
+                    max-width: 600px;
+                    margin: 0 auto;
+                    padding: 20px;
+                    text-align: center; 
+                }}
+                .container {{
+                    background-color: #ffffff;
+                    border-radius: 8px;
+                    padding: 30px;
+                    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+                }}
+                .header {{
+                    text-align: center;
+                    margin-bottom: 30px;
+                }}
+                .title {{
+                    color: #2196F3;
+                    font-size: 24px;
+                    margin: 0;
+                }}
+                .button {{
+                    display: inline-block;
+                    background-color: #2196F3;
+                    color: white;
+                    text-decoration: none;
+                    padding: 12px 24px;
+                    border-radius: 4px;
+                    margin: 20px 0;
+                }}
+                .footer {{
+                    font-size: 14px;
+                    color: #666666;
+                    margin-top: 30px;
+                    text-align: center;
+                }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="header">
+                    <h1 class="title">Подтверждение регистрации</h1>
+                </div>
+
+                <p>Здравствуйте, {user.full_name}!</p>
+
+                <p>Для завершения регистрации перейдите по ссылке:</p>
+
+                <div style="text-align: center;">
+                    <a href="{confirmation_link}" class="button">Подтвердить email</a>
+                </div>
+
+                <div class="footer">
+                    <p>Если вы не регистрировались на нашем сайте, просто проигнорируйте это письмо.</p>
+                </div>
+            </div>
+        </body>
+    </html>
+    """
+
+    email_sender.send_email(
+        to_email=user.email,
+        subject="Подтверждение регистрации",
         body=html_content,
         is_html=True
     )

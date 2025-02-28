@@ -1,6 +1,6 @@
 from datetime import datetime, timezone, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, BackgroundTasks
 from fastapi.security import HTTPBearer
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,10 +16,12 @@ from src.models.enums import StageType
 from src.models.user import User2Roles, MentorInfo, UserStatusHistory, EmailVerificationToken
 from src.schemas.user import UserCreate, UserLogin, Token, UserResponse, UserResponseRegister, MentorCreate
 from src.auth.jwt import create_access_token, get_current_user
+from src.settings import settings
 from src.utils.email_verification import create_verification_token, send_verification_email, verify_email_token
 
 from src.utils.router_states import file_router_state, user_router_state
 from src.utils.stage_checker import check_stage
+from src.utils.background_tasks import send_registration_confirmation_email
 
 security = HTTPBearer()
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -116,6 +118,7 @@ async def register(
         full_name: str = Form(None),
         consent_file: UploadFile = File(...),
         education_certificate_file: UploadFile = File(...),
+        background_tasks: BackgroundTasks = BackgroundTasks(),
         session: AsyncSession = Depends(get_session)
 ):
     await check_stage(session, StageType.REGISTRATION)
@@ -204,10 +207,11 @@ async def register(
 
     verification_token = await create_verification_token(user.id, session)
 
-    if not await send_verification_email(user.email, user.full_name, verification_token.token):
-        print(f"Failed to send verification email to {user.email}")
-
     await session.commit()
+
+    confirmation_link = f"{settings.base_url}/auth/confirm/{verification_token}"
+
+    background_tasks.add_task(send_registration_confirmation_email, user, confirmation_link)
 
     return user_with_data
 
@@ -222,6 +226,7 @@ async def register_mentor(
         job_title: str = Form(...),
         consent_file: UploadFile = File(...),
         job_certificate_file: UploadFile = File(...),
+        background_tasks: BackgroundTasks = BackgroundTasks(),
         session: AsyncSession = Depends(get_session)
 ):
     await check_stage(session, StageType.REGISTRATION)
@@ -305,10 +310,11 @@ async def register_mentor(
 
     verification_token = await create_verification_token(user.id, session)
 
-    if not await send_verification_email(user.email, user.full_name, verification_token.token):
-        print(f"Failed to send verification email to {user.email}")
-
     await session.commit()
+
+    confirmation_link = f"{settings.base_url}/auth/confirm/{verification_token}"
+
+    background_tasks.add_task(send_registration_confirmation_email, user, confirmation_link)
 
     return user_with_data
 
@@ -318,6 +324,7 @@ async def register_special(
         email: str = Form(...),
         password: str = Form(...),
         full_name: str = Form(...),
+        background_tasks: BackgroundTasks = BackgroundTasks(),
         session: AsyncSession = Depends(get_session)
 ):
     query = select(User).where(User.email == email)
@@ -369,10 +376,11 @@ async def register_special(
 
     verification_token = await create_verification_token(user.id, session)
 
-    if not await send_verification_email(user.email, user.full_name, verification_token.token):
-        print(f"Failed to send verification email to {user.email}")
-
     await session.commit()
+
+    confirmation_link = f"{settings.base_url}/auth/confirm/{verification_token}"
+
+    background_tasks.add_task(send_registration_confirmation_email, user, confirmation_link)
 
     return user_with_data
 
