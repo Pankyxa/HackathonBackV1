@@ -197,8 +197,6 @@ async def send_team_invitation_email(user: User, team: Team):
 
 async def send_registration_confirmation_email(user: User, confirmation_link: str):
     """Отправляет email с подтверждением регистрации"""
-    await asyncio.sleep(10)
-
     html_content = f"""
     <!DOCTYPE html>
     <html>

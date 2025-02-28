@@ -207,11 +207,11 @@ async def register(
 
     verification_token = await create_verification_token(user.id, session)
 
-    await session.commit()
-
     verification_link = f"{settings.base_url}/auth/verify-email/{verification_token.token}"
 
     background_tasks.add_task(send_registration_confirmation_email, user, verification_link)
+
+    await session.commit()
 
     return user_with_data
 
@@ -310,11 +310,11 @@ async def register_mentor(
 
     verification_token = await create_verification_token(user.id, session)
 
-    await session.commit()
-
     verification_link = f"{settings.base_url}/auth/verify-email/{verification_token}"
 
     background_tasks.add_task(send_registration_confirmation_email, user, verification_link)
+
+    await session.commit()
 
     return user_with_data
 
@@ -376,11 +376,11 @@ async def register_special(
 
     verification_token = await create_verification_token(user.id, session)
 
-    await session.commit()
-
     verification_link = f"{settings.base_url}/auth/verify-email/{verification_token}"
 
     background_tasks.add_task(send_registration_confirmation_email, user, verification_link)
+
+    await session.commit()
 
     return user_with_data
 
@@ -539,6 +539,8 @@ async def resend_verification_email(
     verification_link = f"{settings.base_url}/auth/verify-email/{verification_token.token}"
 
     background_tasks.add_task(send_registration_confirmation_email, user, verification_link)
+
+    await session.commit()
 
 
 @router.post("/test-email")
