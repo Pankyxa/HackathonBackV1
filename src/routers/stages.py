@@ -22,7 +22,7 @@ async def check_admin_role(user: User, db: AsyncSession) -> bool:
     user_roles = result.scalars().all()
     return any(role.name == "admin" for role in user_roles)
 
-@router.get("/", response_model=List[StageResponse])
+@router.get("/all", response_model=List[StageResponse])
 async def get_stages(
         current_user: User = Depends(get_current_user),
         session: AsyncSession = Depends(get_session)

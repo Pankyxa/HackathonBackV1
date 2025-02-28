@@ -1295,7 +1295,8 @@ async def upload_team_solution(
     session: AsyncSession = Depends(get_session)
 ):
     """Загрузка ZIP файла с решением команды"""
-    # Проверяем существование команды
+    await check_stage(session, [StageType.TASK_DISTRIBUTION, StageType.SOLUTION_SUBMISSION])
+
     team_query = select(Team).where(Team.id == team_id)
     team = await session.execute(team_query)
     team = team.scalar_one_or_none()
@@ -1306,7 +1307,6 @@ async def upload_team_solution(
             detail="Команда не найдена"
         )
 
-    # Проверяем, является ли пользователь членом команды
     member_query = select(TeamMember).where(
         TeamMember.team_id == team_id,
         TeamMember.user_id == current_user.id,
@@ -1321,14 +1321,12 @@ async def upload_team_solution(
             detail="Вы не являетесь участником этой команды"
         )
 
-    # Проверяем расширение файла
     if not solution_file.filename.lower().endswith('.zip'):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Файл решения должен быть в формате ZIP"
         )
 
-    # Удаляем предыдущее решение, если оно существует
     existing_solution_query = select(DBFile).where(
         DBFile.team_id == team_id,
         DBFile.file_type_id == file_router_state.solution_type_id
@@ -1342,7 +1340,6 @@ async def upload_team_solution(
         await session.delete(existing_solution)
         await session.flush()
 
-    # Сохраняем новое решение
     solution_file_model = await save_file(
         upload_file=solution_file,
         owner_id=team_id,
@@ -1365,7 +1362,8 @@ async def upload_team_deployment(
     session: AsyncSession = Depends(get_session)
 ):
     """Загрузка файла с описанием развертывания (TXT или MD)"""
-    # Проверяем существование команды
+    await check_stage(session, [StageType.TASK_DISTRIBUTION, StageType.SOLUTION_SUBMISSION])
+
     team_query = select(Team).where(Team.id == team_id)
     team = await session.execute(team_query)
     team = team.scalar_one_or_none()
@@ -1376,7 +1374,6 @@ async def upload_team_deployment(
             detail="Команда не найдена"
         )
 
-    # Проверяем, является ли пользователь членом команды
     member_query = select(TeamMember).where(
         TeamMember.team_id == team_id,
         TeamMember.user_id == current_user.id,
@@ -1391,7 +1388,6 @@ async def upload_team_deployment(
             detail="Вы не являетесь участником этой команды"
         )
 
-    # Проверяем расширение файла
     file_ext = os.path.splitext(deployment_file.filename.lower())[1]
     if file_ext not in ['.txt', '.md']:
         raise HTTPException(
@@ -1399,7 +1395,6 @@ async def upload_team_deployment(
             detail="Файл описания должен быть в формате TXT или MD"
         )
 
-    # Удаляем предыдущее описание, если оно существует
     existing_deployment_query = select(DBFile).where(
         DBFile.team_id == team_id,
         DBFile.file_type_id == file_router_state.deployment_type_id
@@ -1413,7 +1408,6 @@ async def upload_team_deployment(
         await session.delete(existing_deployment)
         await session.flush()
 
-    # Сохраняем новое описание
     deployment_file_model = await save_file(
         upload_file=deployment_file,
         owner_id=team_id,
@@ -1435,7 +1429,6 @@ async def get_team_solution(
     session: AsyncSession = Depends(get_session)
 ):
     """Получить файл решения команды"""
-    # Проверяем существование команды
     team_query = select(Team).where(Team.id == team_id)
     team = await session.execute(team_query)
     team = team.scalar_one_or_none()
@@ -1446,7 +1439,6 @@ async def get_team_solution(
             detail="Команда не найдена"
         )
 
-    # Проверяем права доступа
     member_query = select(TeamMember).where(
         TeamMember.team_id == team_id,
         TeamMember.user_id == current_user.id,
@@ -1468,7 +1460,6 @@ async def get_team_solution(
             detail="У вас нет доступа к файлам этой команды"
         )
 
-    # Получаем файл решения
     solution_query = select(DBFile).where(
         DBFile.team_id == team_id,
         DBFile.file_type_id == file_router_state.solution_type_id
@@ -1496,7 +1487,6 @@ async def get_team_deployment(
     session: AsyncSession = Depends(get_session)
 ):
     """Получить файл описания развертывания команды"""
-    # Проверяем существование команды
     team_query = select(Team).where(Team.id == team_id)
     team = await session.execute(team_query)
     team = team.scalar_one_or_none()
@@ -1507,7 +1497,6 @@ async def get_team_deployment(
             detail="Команда не найдена"
         )
 
-    # Проверяем права доступа
     member_query = select(TeamMember).where(
         TeamMember.team_id == team_id,
         TeamMember.user_id == current_user.id,
@@ -1529,7 +1518,6 @@ async def get_team_deployment(
             detail="У вас нет доступа к файлам этой команды"
         )
 
-    # Получаем файл описания
     deployment_query = select(DBFile).where(
         DBFile.team_id == team_id,
         DBFile.file_type_id == file_router_state.deployment_type_id
