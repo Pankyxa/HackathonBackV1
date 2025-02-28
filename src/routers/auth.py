@@ -209,9 +209,9 @@ async def register(
 
     await session.commit()
 
-    confirmation_link = f"{settings.base_url}/auth/confirm/{verification_token.token}"
+    verification_link = f"{settings.base_url}/auth/verify-email/{verification_token.token}"
 
-    background_tasks.add_task(send_registration_confirmation_email, user, confirmation_link)
+    background_tasks.add_task(send_registration_confirmation_email, user, verification_link)
 
     return user_with_data
 
@@ -312,9 +312,9 @@ async def register_mentor(
 
     await session.commit()
 
-    confirmation_link = f"{settings.base_url}/auth/confirm/{verification_token}"
+    verification_link = f"{settings.base_url}/auth/verify-email/{verification_token}"
 
-    background_tasks.add_task(send_registration_confirmation_email, user, confirmation_link)
+    background_tasks.add_task(send_registration_confirmation_email, user, verification_link)
 
     return user_with_data
 
@@ -378,9 +378,9 @@ async def register_special(
 
     await session.commit()
 
-    confirmation_link = f"{settings.base_url}/auth/confirm/{verification_token}"
+    verification_link = f"{settings.base_url}/auth/verify-email/{verification_token}"
 
-    background_tasks.add_task(send_registration_confirmation_email, user, confirmation_link)
+    background_tasks.add_task(send_registration_confirmation_email, user, verification_link)
 
     return user_with_data
 
@@ -491,6 +491,7 @@ async def resend_verification(
 @router.post("/resend-verification-email")
 async def resend_verification_email(
         email: str = Form(...),
+        background_tasks: BackgroundTasks = BackgroundTasks(),
         session: AsyncSession = Depends(get_session)
 ):
     """
@@ -535,16 +536,9 @@ async def resend_verification_email(
 
     verification_token = await create_verification_token(user.id, session)
 
-    if await send_verification_email(user.email, user.full_name, verification_token.token):
-        await session.commit()
-        return {
-            "message": "Если указанный email зарегистрирован в системе, на него будет отправлено письмо с подтверждением"}
-    else:
-        await session.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Ошибка при отправке письма"
-        )
+    verification_link = f"{settings.base_url}/auth/verify-email/{verification_token}"
+
+    background_tasks.add_task(send_registration_confirmation_email, user, verification_link)
 
 
 @router.post("/test-email")
