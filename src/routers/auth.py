@@ -209,7 +209,7 @@ async def register(
 
     await session.commit()
 
-    confirmation_link = f"{settings.base_url}/auth/confirm/{verification_token}"
+    confirmation_link = f"{settings.base_url}/auth/confirm/{verification_token.token}"
 
     background_tasks.add_task(send_registration_confirmation_email, user, confirmation_link)
 
