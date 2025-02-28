@@ -278,12 +278,17 @@ async def send_status_change_email(user: User, new_status: str, comment: str = N
     """Отправляет email с уведомлением об изменении статуса пользователя"""
 
     status_descriptions = {
+        "pending": "на рассмотрении",
+        "approved": "одобрен",
+        "need_update": "требует обновления",
+        # Для значений из enum
         "PENDING": "на рассмотрении",
         "APPROVED": "одобрен",
         "NEED_UPDATE": "требует обновления"
     }
 
-    status_text = status_descriptions.get(new_status, new_status)
+    status_key = new_status.lower()
+    status_text = status_descriptions.get(status_key, new_status)
 
     comment_block = ""
     if comment:
