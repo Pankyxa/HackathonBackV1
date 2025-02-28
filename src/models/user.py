@@ -1,5 +1,5 @@
-from datetime import datetime
-from sqlalchemy import Column, String, DateTime, ForeignKey
+from datetime import datetime, timezone
+from sqlalchemy import Column, String, DateTime, ForeignKey, Boolean
 from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.postgresql import UUID
 import uuid
@@ -17,6 +17,7 @@ class User(Base):
     full_name = Column(String(255), nullable=False, index=True)
     registered_at = Column(DateTime(timezone=True), default=datetime.utcnow)
     current_status_id = Column(UUID(as_uuid=True), ForeignKey('user_status_types.id'), nullable=False)
+    email_verified = Column(Boolean, default=False, nullable=False)
 
     # Relationships
     user2roles = relationship("User2Roles", back_populates="user")
@@ -94,3 +95,23 @@ class User2Roles(Base):
     # Relationships
     user = relationship("User", back_populates="user2roles")
     role = relationship("Role", back_populates="user2roles")
+
+
+class EmailVerificationToken(Base):
+    """Модель для хранения токенов подтверждения email"""
+    __tablename__ = 'email_verification_tokens'
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey('users.id'), nullable=False)
+    token = Column(String(255), nullable=False, unique=True)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    used = Column(Boolean, default=False, nullable=False)
+
+    # Relationships
+    user = relationship("User")
+
+    @property
+    def is_expired(self):
+        return datetime.now(timezone.utc) > self.expires_at
+

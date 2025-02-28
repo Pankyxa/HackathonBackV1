@@ -1,8 +1,10 @@
+from datetime import datetime, timezone, timedelta
+
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
 from fastapi.security import HTTPBearer
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, and_
 import uuid
 import os
 import aiofiles
@@ -11,9 +13,10 @@ from src.auth.utils import verify_password, get_password_hash
 from src.db import get_session
 from src.models import User, FileType, FileOwnerType, File as FileModel, ParticipantInfo
 from src.models.enums import StageType
-from src.models.user import User2Roles, MentorInfo, UserStatusHistory
+from src.models.user import User2Roles, MentorInfo, UserStatusHistory, EmailVerificationToken
 from src.schemas.user import UserCreate, UserLogin, Token, UserResponse, UserResponseRegister, MentorCreate
 from src.auth.jwt import create_access_token, get_current_user
+from src.utils.email_verification import create_verification_token, send_verification_email, verify_email_token
 
 from src.utils.router_states import file_router_state, user_router_state
 from src.utils.stage_checker import check_stage
@@ -56,7 +59,6 @@ async def save_file(
     file_name = f"{uuid.uuid4()}{file_extension}"
     file_path = os.path.join(upload_dir, file_name)
 
-    # Проверка допустимых расширений для каждого типа файла
     if file_type == FileType.SOLUTION and file_extension != '.zip':
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -72,7 +74,6 @@ async def save_file(
         content = await upload_file.read()
         await out_file.write(content)
 
-    # Определение формата файла
     if file_extension == '.pdf':
         file_format_id = file_router_state.pdf_format_id
     elif file_extension in ['.jpg', '.jpeg', '.png']:
@@ -200,6 +201,14 @@ async def register(
     result = await session.execute(query)
     user_with_data = result.scalar_one()
     user_with_data.mentor_info = None
+
+    verification_token = await create_verification_token(user.id, session)
+
+    if not await send_verification_email(user.email, user.full_name, verification_token.token):
+        print(f"Failed to send verification email to {user.email}")
+
+    await session.commit()
+
     return user_with_data
 
 
@@ -293,6 +302,14 @@ async def register_mentor(
     result = await session.execute(query)
     user_with_data = result.scalar_one()
     user_with_data.participant_info = None
+
+    verification_token = await create_verification_token(user.id, session)
+
+    if not await send_verification_email(user.email, user.full_name, verification_token.token):
+        print(f"Failed to send verification email to {user.email}")
+
+    await session.commit()
+
     return user_with_data
 
 
@@ -350,6 +367,13 @@ async def register_special(
     user_with_data.participant_info = None
     user_with_data.mentor_info = None
 
+    verification_token = await create_verification_token(user.id, session)
+
+    if not await send_verification_email(user.email, user.full_name, verification_token.token):
+        print(f"Failed to send verification email to {user.email}")
+
+    await session.commit()
+
     return user_with_data
 
 
@@ -364,6 +388,12 @@ async def login(user_data: UserLogin, session: AsyncSession = Depends(get_sessio
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Неверный логин или пароль",
             headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    if not user.email_verified:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Email не подтвержден. Пожалуйста, проверьте вашу почту или запросите новое письмо для подтверждения.",
         )
 
     access_token = create_access_token(
@@ -412,3 +442,98 @@ async def read_users_me(
         user.mentor_info = None
 
     return user
+
+
+@router.get("/verify-email/{token}")
+async def verify_email(
+        token: str,
+        session: AsyncSession = Depends(get_session)
+):
+    """Подтверждение email адреса"""
+    user = await verify_email_token(token, session)
+    await session.commit()
+    return {"message": "Email успешно подтвержден"}
+
+
+@router.post("/resend-verification")
+async def resend_verification(
+        current_user: User = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session)
+):
+    """Повторная отправка письма для подтверждения email"""
+    if current_user.email_verified:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email уже подтвержден"
+        )
+
+    verification_token = await create_verification_token(current_user.id, session)
+
+    if await send_verification_email(current_user.email, current_user.full_name, verification_token.token):
+        await session.commit()
+        return {"message": "Письмо с подтверждением отправлено"}
+    else:
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Ошибка при отправке письма"
+        )
+
+
+@router.post("/resend-verification-email")
+async def resend_verification_email(
+        email: str = Form(...),
+        session: AsyncSession = Depends(get_session)
+):
+    """
+    Повторная отправка письма для подтверждения email по email адресу.
+    Не требует аутентификации.
+    """
+    query = (
+        select(User)
+        .where(User.email == email)
+    )
+    result = await session.execute(query)
+    user = result.scalar_one_or_none()
+
+    if not user:
+        return {
+            "message": "Если указанный email зарегистрирован в системе, на него будет отправлено письмо с подтверждением"}
+
+    if user.email_verified:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email уже подтвержден"
+        )
+
+    recent_token_query = (
+        select(EmailVerificationToken)
+        .where(
+            and_(
+                EmailVerificationToken.user_id == user.id,
+                EmailVerificationToken.used == False,
+                EmailVerificationToken.created_at >= datetime.now(timezone.utc) - timedelta(minutes=5)
+            )
+        )
+    )
+    result = await session.execute(recent_token_query)
+    recent_token = result.scalar_one_or_none()
+
+    if recent_token:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Письмо с подтверждением уже было отправлено недавно. Пожалуйста, подождите 5 минут перед повторной попыткой."
+        )
+
+    verification_token = await create_verification_token(user.id, session)
+
+    if await send_verification_email(user.email, user.full_name, verification_token.token):
+        await session.commit()
+        return {
+            "message": "Если указанный email зарегистрирован в системе, на него будет отправлено письмо с подтверждением"}
+    else:
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Ошибка при отправке письма"
+        )

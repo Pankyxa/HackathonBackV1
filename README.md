@@ -9,6 +9,7 @@ POSTGRES_DB=your_database
 SMTP_HOST=your-smtp-server
 SMTP_PORT=25
 SMTP_SENDER=your-sender@domain.com
+BASE_URL=http://localhost:8000
 ```
 
 ### Запуск приложения

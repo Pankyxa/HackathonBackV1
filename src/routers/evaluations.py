@@ -16,7 +16,7 @@ from src.schemas.evaluation import (
     TeamEvaluationResponse,
     TeamTotalScore, UnevaluatedTeam
 )
-from src.utils.router_states import user_router_state  # Добавляем импорт state
+from src.utils.router_states import user_router_state
 
 router = APIRouter(
     prefix="/evaluations",

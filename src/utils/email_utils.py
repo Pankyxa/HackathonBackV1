@@ -32,14 +32,12 @@ class EmailSender:
         msg = MIMEMultipart()
         msg['From'] = self.smtp_sender
 
-        # Обработка списка получателей
         if isinstance(to_email, list):
             msg['To'] = ', '.join(to_email)
         else:
             msg['To'] = to_email
         msg['Subject'] = subject
 
-        # Добавляем тело письма с указанным форматом
         content_type = 'html' if is_html else 'plain'
         msg.attach(MIMEText(body, content_type))
 
