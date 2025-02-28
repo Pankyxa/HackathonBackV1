@@ -536,7 +536,7 @@ async def resend_verification_email(
 
     verification_token = await create_verification_token(user.id, session)
 
-    verification_link = f"{settings.base_url}/auth/verify-email/{verification_token}"
+    verification_link = f"{settings.base_url}/auth/verify-email/{verification_token.token}"
 
     background_tasks.add_task(send_registration_confirmation_email, user, verification_link)
 
