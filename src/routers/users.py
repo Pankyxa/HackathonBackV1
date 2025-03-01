@@ -120,6 +120,16 @@ async def search_mentors(
     """
     search_query = f"%{query}%"
 
+    current_user_team = (
+        select(TeamMember.team_id)
+        .where(
+            and_(
+                TeamMember.user_id == current_user.id,
+                TeamMember.status_id == team_router_state.accepted_status_id
+            )
+        )
+    )
+
     stmt = (
         select(User)
         .options(
@@ -140,7 +150,20 @@ async def search_mentors(
                         User2Roles.role_id == user_router_state.mentor_role_id
                     )
                 )
-            )
+            ),
+                not_(
+                    exists(
+                        select(1)
+                        .where(
+                            TeamMember.user_id == User.id,
+                            TeamMember.team_id.in_(current_user_team),
+                            or_(
+                                TeamMember.status_id == team_router_state.accepted_status_id,
+                                TeamMember.status_id == team_router_state.pending_status_id
+                            )
+                        )
+                    )
+                )
         )
         .limit(limit)
         .offset(offset)
