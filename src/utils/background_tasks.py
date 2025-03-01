@@ -229,7 +229,7 @@ async def send_registration_confirmation_email(user: User, confirmation_link: st
                                         </tr>
                                         <tr>
                                             <td align="center" style="padding: 0 0 20px 0;">
-                                                <p style="margin: 0;">Для завершения регистрации перейдите по ссылке:</p>
+                                                <p style="margin: 0;">Для завершения регистрации нажмите на кнопку:</p>
                                             </td>
                                         </tr>
                                         <tr>
@@ -244,6 +244,7 @@ async def send_registration_confirmation_email(user: User, confirmation_link: st
                                                         </td>
                                                     </tr>
                                                 </table>
+                                                <p style="margin: 10px 0 0 0;">или перейдите по ссылке: <a href="{confirmation_link}" style="color: #2196F3;">{confirmation_link}</a></p>
                                             </td>
                                         </tr>
                                     </table>
