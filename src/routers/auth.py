@@ -124,7 +124,7 @@ async def register(
     await check_stage(session, StageType.REGISTRATION)
 
     user_data = UserCreate(
-        email=email,
+        email=email.lower(),
         password=password,
         number=number,
         vuz=vuz,
@@ -232,7 +232,7 @@ async def register_mentor(
     await check_stage(session, StageType.REGISTRATION)
 
     mentor_data = MentorCreate(
-        email=email,
+        email=email.lower(),
         password=password,
         full_name=full_name,
         number=number,
@@ -327,7 +327,7 @@ async def register_special(
         background_tasks: BackgroundTasks = BackgroundTasks(),
         session: AsyncSession = Depends(get_session)
 ):
-    query = select(User).where(User.email == email)
+    query = select(User).where(User.email == email.lower())
     result = await session.execute(query)
     if result.scalar_one_or_none():
         raise HTTPException(
@@ -337,7 +337,7 @@ async def register_special(
 
     user = User(
         id=uuid.uuid4(),
-        email=email,
+        email=email.lower(),
         password=get_password_hash(password),
         full_name=full_name,
         current_status_id=user_router_state.approved_status_id,
@@ -387,7 +387,7 @@ async def register_special(
 
 @router.post("/login", response_model=Token)
 async def login(user_data: UserLogin, session: AsyncSession = Depends(get_session)):
-    query = select(User).where(User.email == user_data.email)
+    query = select(User).where(User.email == user_data.email.lower())
     result = await session.execute(query)
     user = result.scalar_one_or_none()
 
