@@ -1359,7 +1359,7 @@ async def upload_team_solution(
         session: AsyncSession = Depends(get_session)
 ):
     """Загрузка ZIP файла с решением команды"""
-    # await check_stage(session, [StageType.TASK_DISTRIBUTION, StageType.SOLUTION_SUBMISSION])
+    await check_stage(session, [StageType.TASK_DISTRIBUTION, StageType.SOLUTION_SUBMISSION])
 
     team_query = select(Team).where(Team.id == team_id)
     team = await session.execute(team_query)
