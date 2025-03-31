@@ -1,5 +1,12 @@
 import uuid
 
+from fastapi import Header
+from fastapi.responses import StreamingResponse, Response
+import hashlib
+import aiofiles
+import asyncio
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException, status, File, UploadFile, Form, Query
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,7 +17,6 @@ from uuid import UUID
 import os
 
 from sqlalchemy.orm import joinedload, selectinload
-from sqlalchemy.testing.plugin.plugin_base import options
 
 from src.db import get_session
 from src.models import User, Team, TeamMember, Role, UserStatusHistory, Stage
@@ -20,11 +26,12 @@ from src.models.user import User2Roles
 from src.schemas.team import TeamCreate, TeamResponse, TeamMemberResponse, TeamMemberCreate, TeamInvitationResponse, \
     TeamMembersResponse, TeamMemberDetailResponse, TeamStatusDetails, PaginatedTeamsResponse
 from src.auth.jwt import get_current_user
-from src.routers.auth import save_file
+
 from src.settings import settings
 from fastapi import BackgroundTasks
 from src.utils.background_tasks import notify_active_teams, send_team_invitation_email
 from src.utils.email_utils import email_sender
+from src.utils.file_utils import save_file
 from src.utils.router_states import team_router_state, user_router_state, stage_router_state
 from src.utils.stage_checker import check_stage
 from src.utils.router_states import team_router_state, user_router_state, file_router_state
@@ -1342,6 +1349,8 @@ async def leave_team(
     return {"message": "Вы успешно вышли из команды"}
 
 
+from src.utils.solution_utils import save_team_solution
+
 @router.post("/{team_id}/solution")
 async def upload_team_solution(
         team_id: uuid.UUID,
@@ -1350,7 +1359,7 @@ async def upload_team_solution(
         session: AsyncSession = Depends(get_session)
 ):
     """Загрузка ZIP файла с решением команды"""
-    await check_stage(session, [StageType.TASK_DISTRIBUTION, StageType.SOLUTION_SUBMISSION])
+    # await check_stage(session, [StageType.TASK_DISTRIBUTION, StageType.SOLUTION_SUBMISSION])
 
     team_query = select(Team).where(Team.id == team_id)
     team = await session.execute(team_query)
@@ -1376,12 +1385,6 @@ async def upload_team_solution(
             detail="Вы не являетесь участником этой команды"
         )
 
-    if not solution_file.filename.lower().endswith('.zip'):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Файл решения должен быть в формате ZIP"
-        )
-
     existing_solution_query = select(DBFile).where(
         DBFile.team_id == team_id,
         DBFile.file_type_id == file_router_state.solution_type_id
@@ -1395,11 +1398,11 @@ async def upload_team_solution(
         await session.delete(existing_solution)
         await session.flush()
 
-    solution_file_model = await save_file(
+    solution_file_model = await save_team_solution(
         upload_file=solution_file,
-        owner_id=team_id,
-        file_type=FileType.SOLUTION,
-        owner_type=FileOwnerType.TEAM
+        team_id=team_id,
+        session=session,
+        max_file_size=500 * 1024 * 1024  # 500MB
     )
 
     session.add(solution_file_model)
@@ -1480,6 +1483,9 @@ async def upload_team_deployment(
 @router.get("/{team_id}/solution")
 async def get_team_solution(
         team_id: uuid.UUID,
+        range: Optional[str] = Header(None),
+        if_none_match: Optional[str] = Header(None),
+        if_modified_since: Optional[str] = Header(None),
         current_user: User = Depends(get_current_user),
         session: AsyncSession = Depends(get_session)
 ):
@@ -1529,10 +1535,76 @@ async def get_team_solution(
             detail="Файл решения не найден"
         )
 
-    return FileResponse(
-        path=solution.file_path,
-        filename=solution.filename,
-        media_type="application/zip"
+    file_size = os.path.getsize(solution.file_path)
+    mtime = os.path.getmtime(solution.file_path)
+    mtime_dt = datetime.fromtimestamp(mtime)
+
+    etag = hashlib.md5(f"{mtime}{file_size}".encode()).hexdigest()
+
+    if if_none_match and if_none_match == etag:
+        return Response(status_code=304)
+
+    if if_modified_since:
+        try:
+            ims_dt = datetime.strptime(if_modified_since, "%a, %d %b %Y %H:%M:%S GMT")
+            if mtime_dt <= ims_dt:
+                return Response(status_code=304)
+        except ValueError:
+            pass
+
+    start = 0
+    end = file_size - 1
+    status_code = 200
+
+    if range is not None:
+        try:
+            start_str = range.replace('bytes=', '').split('-')[0]
+            start = int(start_str)
+            if start < 0 or start >= file_size:
+                raise HTTPException(
+                    status_code=status.HTTP_416_REQUESTED_RANGE_NOT_SATISFIABLE,
+                    detail="Requested range not satisfiable"
+                )
+            status_code = 206
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid range header"
+            )
+
+    headers = {
+        'Content-Disposition': f'attachment; filename="{solution.filename}"',
+        'Content-Type': 'application/zip',
+        'Accept-Ranges': 'bytes',
+        'Cache-Control': 'public, max-age=3600',
+        'ETag': etag,
+        'Last-Modified': mtime_dt.strftime("%a, %d %b %Y %H:%M:%S GMT"),
+        'Content-Length': str(end - start + 1),
+        'X-Accel-Buffering': 'no'
+    }
+
+    if status_code == 206:
+        headers['Content-Range'] = f'bytes {start}-{end}/{file_size}'
+
+    async def file_iterator():
+        chunk_size = 256 * 1024
+        async with aiofiles.open(solution.file_path, 'rb') as f:
+            await f.seek(start)
+            bytes_remaining = end - start + 1
+            while bytes_remaining > 0:
+                chunk_size = min(chunk_size, bytes_remaining)
+                chunk = await f.read(chunk_size)
+                if not chunk:
+                    break
+                yield chunk
+                bytes_remaining -= len(chunk)
+                await asyncio.sleep(0)
+
+    return StreamingResponse(
+        file_iterator(),
+        headers=headers,
+        media_type='application/zip',
+        status_code=status_code
     )
 
 

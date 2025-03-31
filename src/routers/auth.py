@@ -18,6 +18,7 @@ from src.schemas.user import UserCreate, UserLogin, Token, UserResponse, UserRes
 from src.auth.jwt import create_access_token, get_current_user
 from src.settings import settings
 from src.utils.email_verification import create_verification_token, send_verification_email, verify_email_token
+from src.utils.file_utils import save_file
 
 from src.utils.router_states import file_router_state, user_router_state
 from src.utils.stage_checker import check_stage
@@ -25,85 +26,6 @@ from src.utils.background_tasks import send_registration_confirmation_email
 
 security = HTTPBearer()
 router = APIRouter(prefix="/auth", tags=["auth"])
-
-
-async def save_file(
-        upload_file: UploadFile,
-        owner_id: uuid.UUID,
-        file_type: FileType,
-        owner_type: FileOwnerType
-) -> FileModel:
-    """Сохранение файла с указанием владельца"""
-    owner_type_id = (file_router_state.user_owner_type_id
-                     if owner_type == FileOwnerType.USER
-                     else file_router_state.team_owner_type_id)
-
-    if file_type == FileType.CONSENT:
-        file_type_id = file_router_state.consent_type_id
-    elif file_type == FileType.EDUCATION_CERTIFICATE:
-        file_type_id = file_router_state.education_certificate_type_id
-    elif file_type == FileType.TEAM_LOGO:
-        file_type_id = file_router_state.team_logo_type_id
-    elif file_type == FileType.JOB_CERTIFICATE:
-        file_type_id = file_router_state.job_certificate_type_id
-    elif file_type == FileType.SOLUTION:
-        file_type_id = file_router_state.solution_type_id
-    elif file_type == FileType.DEPLOYMENT:
-        file_type_id = file_router_state.deployment_type_id
-    else:
-        raise ValueError(f"Неизвестный тип файла: {file_type}")
-
-    base_dir = "uploads/users" if owner_type_id == file_router_state.user_owner_type_id else "uploads/teams"
-    upload_dir = f"{base_dir}/{owner_id}"
-    os.makedirs(upload_dir, exist_ok=True)
-
-    file_extension = os.path.splitext(upload_file.filename)[1].lower()
-    file_name = f"{uuid.uuid4()}{file_extension}"
-    file_path = os.path.join(upload_dir, file_name)
-
-    if file_type == FileType.SOLUTION and file_extension != '.zip':
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Для решения допустим только ZIP формат"
-        )
-    elif file_type == FileType.DEPLOYMENT and file_extension not in ['.txt', '.md']:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Для описания развертывания допустимы только TXT или MD форматы"
-        )
-
-    async with aiofiles.open(file_path, 'wb') as out_file:
-        content = await upload_file.read()
-        await out_file.write(content)
-
-    if file_extension == '.pdf':
-        file_format_id = file_router_state.pdf_format_id
-    elif file_extension in ['.jpg', '.jpeg', '.png']:
-        file_format_id = file_router_state.image_format_id
-    elif file_extension == '.zip':
-        file_format_id = file_router_state.zip_format_id
-    elif file_extension == '.txt':
-        file_format_id = file_router_state.txt_format_id
-    elif file_extension == '.md':
-        file_format_id = file_router_state.md_format_id
-    else:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Неподдерживаемый формат файла: {file_extension}"
-        )
-
-    file_model = FileModel(
-        id=uuid.uuid4(),
-        filename=upload_file.filename,
-        file_path=file_path,
-        file_format_id=file_format_id,
-        file_type_id=file_type_id,
-        owner_type_id=owner_type_id,
-        user_id=owner_id if owner_type == FileOwnerType.USER else None,
-        team_id=owner_id if owner_type == FileOwnerType.TEAM else None
-    )
-
-    return file_model
 
 
 @router.post("/register", response_model=UserResponseRegister)
