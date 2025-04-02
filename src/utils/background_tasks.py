@@ -526,7 +526,7 @@ async def send_hackathon_consultation_notification(session: AsyncSession):
         try:
             success = email_sender.send_email(
                 to_email=user.email,
-                subject="Открытие хакатона",
+                subject="Консультация хакатона",
                 body=html_content,
                 is_html=True
             )
