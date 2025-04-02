@@ -647,3 +647,228 @@ async def send_single_hackathon_consultation_notification(user: User):
     except Exception as e:
         logging.error(f"Исключение при отправке уведомления о консультации на email {user.email}: {str(e)}")
         return False
+
+async def send_judge_briefing_notification(session: AsyncSession):
+    """
+    Фоновая задача для рассылки уведомлений о брифинге
+    всем членам жюри с задержкой между отправками
+    """
+    users_query = (
+        select(User)
+        .distinct()
+        .join(User2Roles)
+        .where(
+            User2Roles.role_id == user_router_state.judge_role_id
+        )
+    )
+
+    result = await session.execute(users_query)
+    users = result.scalars().all()
+
+    total_users = len(users)
+    successful_sends = 0
+    failed_sends = 0
+
+    logging.info(f"Начало рассылки уведомлений о брифинге. Всего получателей: {total_users}")
+    start_time = datetime.now()
+
+    for i, user in enumerate(users, 1):
+        html_content = f"""
+        <!DOCTYPE html>
+        <html>
+            <head>
+                <meta charset="utf-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            </head>
+            <body style="margin: 0; padding: 0; background-color: #f5f5f5;">
+                <table border="0" cellpadding="0" cellspacing="0" width="100%" style="font-family: Arial, sans-serif;">
+                    <tr>
+                        <td align="center" style="padding: 20px 0;">
+                            <table border="0" cellpadding="0" cellspacing="0" width="600" style="background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);">
+                                <tr>
+                                    <td align="center" style="padding: 40px 30px;">
+                                        <!-- Header -->
+                                        <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin-bottom: 30px;">
+                                            <tr>
+                                                <td align="center">
+                                                    <h1 style="color: #2196F3; font-size: 24px; margin: 0;">Брифинг для членов жюри хакатона</h1>
+                                                </td>
+                                            </tr>
+                                        </table>
+
+                                        <!-- Content -->
+                                        <table border="0" cellpadding="0" cellspacing="0" width="100%">
+                                            <tr>
+                                                <td align="center" style="padding: 0 0 20px 0;">
+                                                    <p style="margin: 0;">Здравствуйте, {user.full_name}!</p>
+                                                </td>
+                                            </tr>
+                                            <tr>
+                                                <td align="center" style="padding: 0 0 20px 0;">
+                                                    <p style="margin: 0;">Приглашаем вас на брифинг по проведению хакатона, который состоится завтра, <strong>3 апреля, в 8:30 по Московскому времени</strong>.</p>
+                                                </td>
+                                            </tr>
+                                            <tr>
+                                                <td align="center" style="padding: 20px 0;">
+                                                    <table border="0" cellpadding="0" cellspacing="0">
+                                                        <tr>
+                                                            <td align="center" bgcolor="#2196F3" style="border-radius: 4px;">
+                                                                <a href="https://bigbb2.tyuiu.ru/b/hyc-sjb-5lk-prq" 
+                                                                   style="display: inline-block; padding: 12px 24px; color: #ffffff; text-decoration: none; font-weight: bold;">
+                                                                    Присоединиться к брифингу
+                                                                </a>
+                                                            </td>
+                                                        </tr>
+                                                    </table>
+                                                </td>
+                                            </tr>
+                                            <tr>
+                                                <td align="center" style="padding: 0 0 20px 0;">
+                                                    <p style="margin: 0;">Или перейдите по ссылке: <a href="https://bigbb2.tyuiu.ru/b/hyc-sjb-5lk-prq" style="color: #2196F3;">https://bigbb2.tyuiu.ru/b/hyc-sjb-5lk-prq</a></p>
+                                                </td>
+                                            </tr>
+                                        </table>
+
+                                        <!-- Footer -->
+                                        <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin-top: 30px;">
+                                            <tr>
+                                                <td align="center" style="color: #666666; font-size: 14px;">
+                                                    <p style="margin: 0;">Это автоматическое уведомление, пожалуйста, не отвечайте на него.</p>
+                                                </td>
+                                            </tr>
+                                        </table>
+                                    </td>
+                                </tr>
+                            </table>
+                        </td>
+                    </tr>
+                </table>
+            </body>
+        </html>
+        """
+
+        try:
+            success = email_sender.send_email(
+                to_email=user.email,
+                subject="Брифинг для членов жюри хакатона",
+                body=html_content,
+                is_html=True
+            )
+            if success:
+                successful_sends += 1
+                logging.info(f"[{i}/{total_users}] Отправлено уведомление на email: {user.email}")
+            else:
+                failed_sends += 1
+                logging.error(f"[{i}/{total_users}] Ошибка отправки на email: {user.email}")
+        except Exception as e:
+            failed_sends += 1
+            logging.error(f"[{i}/{total_users}] Исключение при отправке на email {user.email}: {str(e)}")
+
+        if i < total_users:
+            await asyncio.sleep(2)
+
+    end_time = datetime.now()
+    duration = (end_time - start_time).total_seconds()
+
+    logging.info(f"""
+Рассылка уведомлений о брифинге завершена!
+Время выполнения: {duration:.2f} секунд
+Всего отправлено: {total_users}
+Успешно: {successful_sends}
+Ошибок: {failed_sends}
+    """)
+
+
+async def send_single_judge_briefing_notification(user: User):
+    """
+    Отправляет уведомление о брифинге одному члену жюри
+    """
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+        <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        </head>
+        <body style="margin: 0; padding: 0; background-color: #f5f5f5;">
+            <table border="0" cellpadding="0" cellspacing="0" width="100%" style="font-family: Arial, sans-serif;">
+                <tr>
+                    <td align="center" style="padding: 20px 0;">
+                        <table border="0" cellpadding="0" cellspacing="0" width="600" style="background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);">
+                            <tr>
+                                <td align="center" style="padding: 40px 30px;">
+                                    <!-- Header -->
+                                    <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin-bottom: 30px;">
+                                        <tr>
+                                            <td align="center">
+                                                <h1 style="color: #2196F3; font-size: 24px; margin: 0;">Брифинг для членов жюри хакатона</h1>
+                                            </td>
+                                        </tr>
+                                    </table>
+
+                                    <!-- Content -->
+                                    <table border="0" cellpadding="0" cellspacing="0" width="100%">
+                                        <tr>
+                                            <td align="center" style="padding: 0 0 20px 0;">
+                                                <p style="margin: 0;">Здравствуйте, {user.full_name}!</p>
+                                            </td>
+                                        </tr>
+                                        <tr>
+                                            <td align="center" style="padding: 0 0 20px 0;">
+                                                <p style="margin: 0;">Приглашаем вас на брифинг по проведению хакатона, который состоится завтра, <strong>3 апреля, в 8:30 по Московскому времени</strong>.</p>
+                                            </td>
+                                        </tr>
+                                        <tr>
+                                            <td align="center" style="padding: 20px 0;">
+                                                <table border="0" cellpadding="0" cellspacing="0">
+                                                    <tr>
+                                                        <td align="center" bgcolor="#2196F3" style="border-radius: 4px;">
+                                                            <a href="https://bigbb2.tyuiu.ru/b/hyc-sjb-5lk-prq" 
+                                                               style="display: inline-block; padding: 12px 24px; color: #ffffff; text-decoration: none; font-weight: bold;">
+                                                                Присоединиться к брифингу
+                                                            </a>
+                                                        </td>
+                                                    </tr>
+                                                </table>
+                                            </td>
+                                        </tr>
+                                        <tr>
+                                            <td align="center" style="padding: 0 0 20px 0;">
+                                                <p style="margin: 0;">Или перейдите по ссылке: <a href="https://bigbb2.tyuiu.ru/b/hyc-sjb-5lk-prq" style="color: #2196F3;">https://bigbb2.tyuiu.ru/b/hyc-sjb-5lk-prq</a></p>
+                                            </td>
+                                        </tr>
+                                    </table>
+
+                                    <!-- Footer -->
+                                    <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin-top: 30px;">
+                                        <tr>
+                                            <td align="center" style="color: #666666; font-size: 14px;">
+                                                <p style="margin: 0;">Это автоматическое уведомление, пожалуйста, не отвечайте на него.</p>
+                                            </td>
+                                        </tr>
+                                    </table>
+                                </td>
+                            </tr>
+                        </table>
+                    </td>
+                </tr>
+            </table>
+        </body>
+    </html>
+    """
+
+    try:
+        success = email_sender.send_email(
+            to_email=user.email,
+            subject="Брифинг для членов жюри хакатона",
+            body=html_content,
+            is_html=True
+        )
+        if success:
+            logging.info(f"Отправлено уведомление о брифинге на email: {user.email}")
+        else:
+            logging.error(f"Ошибка отправки уведомления о брифинге на email: {user.email}")
+        return success
+    except Exception as e:
+        logging.error(f"Исключение при отправке уведомления о брифинге на email {user.email}: {str(e)}")
+        return False
