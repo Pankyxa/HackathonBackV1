@@ -10,7 +10,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status, File, UploadFile, Form, Query
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, exists, func
+from sqlalchemy import select, exists, func, and_
 from typing import List, Optional
 import json
 from uuid import UUID
@@ -30,7 +30,8 @@ from src.auth.jwt import get_current_user
 from src.settings import settings
 from fastapi import BackgroundTasks
 from src.utils.background_tasks import send_team_invitation_email, \
-    send_hackathon_consultation_notification, send_team_confirmation_email, send_judge_briefing_notification
+    send_hackathon_consultation_notification, send_team_confirmation_email, send_judge_briefing_notification, \
+    send_single_judge_briefing_notification
 from src.utils.email_utils import email_sender
 from src.utils.file_utils import save_file
 from src.utils.router_states import team_router_state, user_router_state, stage_router_state
@@ -1721,3 +1722,51 @@ async def notify_hackathon_briefing(
     return {
         "message": "Запущена рассылка уведомлений о консультации хакатона"
     }
+
+
+@router.post("/notify/judge-briefing/{user_id}", status_code=status.HTTP_200_OK)
+async def send_judge_briefing(
+        user_id: UUID,
+        background_tasks: BackgroundTasks,
+        session: AsyncSession = Depends(get_session),
+        current_user: User = Depends(get_current_user)
+):
+    """
+    Отправляет уведомление о брифинге конкретному члену жюри
+    """
+    user_roles_query = select(User2Roles).where(User2Roles.user_id == current_user.id)
+    user_roles = await session.execute(user_roles_query)
+    user_roles = user_roles.scalars().all()
+
+    is_admin = any(role.role_id == user_router_state.admin_role_id for role in user_roles)
+    is_organizer = any(role.role_id == user_router_state.organizer_role_id for role in user_roles)
+
+    if not (is_admin or is_organizer):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Доступ разрешен только для администраторов и организаторов"
+        )
+
+    user_query = (
+        select(User)
+        .join(User2Roles)
+        .where(
+            and_(
+                User.id == user_id,
+                User2Roles.role_id == user_router_state.judge_role_id
+            )
+        )
+    )
+
+    result = await session.execute(user_query)
+    user = result.scalar_one_or_none()
+
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Пользователь не найден или не является членом жюри"
+        )
+
+    background_tasks.add_task(send_single_judge_briefing_notification, user)
+
+    return {"message": f"Уведомление о брифинге поставлено в очередь для отправки пользователю {user.email}"}
