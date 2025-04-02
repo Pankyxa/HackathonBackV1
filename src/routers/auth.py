@@ -22,7 +22,8 @@ from src.utils.file_utils import save_file
 
 from src.utils.router_states import file_router_state, user_router_state
 from src.utils.stage_checker import check_stage
-from src.utils.background_tasks import send_registration_confirmation_email
+from src.utils.background_tasks import send_registration_confirmation_email, \
+    send_single_hackathon_consultation_notification
 
 security = HTTPBearer()
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -132,6 +133,7 @@ async def register(
     verification_link = f"{settings.base_url}/auth/verify-email/{verification_token.token}"
 
     background_tasks.add_task(send_registration_confirmation_email, user, verification_link)
+    background_tasks.add_task(send_single_hackathon_consultation_notification, user)
 
     await session.commit()
 
@@ -235,6 +237,7 @@ async def register_mentor(
     verification_link = f"{settings.base_url}/auth/verify-email/{verification_token}"
 
     background_tasks.add_task(send_registration_confirmation_email, user, verification_link)
+    background_tasks.add_task(send_single_hackathon_consultation_notification, user)
 
     await session.commit()
 

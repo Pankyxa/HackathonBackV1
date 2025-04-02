@@ -29,7 +29,8 @@ from src.auth.jwt import get_current_user
 
 from src.settings import settings
 from fastapi import BackgroundTasks
-from src.utils.background_tasks import notify_active_teams, send_team_invitation_email
+from src.utils.background_tasks import send_team_invitation_email, \
+    send_hackathon_consultation_notification, send_team_confirmation_email
 from src.utils.email_utils import email_sender
 from src.utils.file_utils import save_file
 from src.utils.router_states import team_router_state, user_router_state, stage_router_state
@@ -583,7 +584,7 @@ async def accept_invitation(
                 registration_closed_stage.is_active = True
                 await stage_router_state.initialize(session)
 
-                background_tasks.add_task(notify_active_teams, session)
+                background_tasks.add_task(send_team_confirmation_email, session)
 
     await session.commit()
     return {"message": "Приглашение принято"}
@@ -1665,3 +1666,29 @@ async def get_team_deployment(
         filename=deployment.filename,
         media_type="text/plain" if deployment.filename.endswith('.txt') else "text/markdown"
     )
+
+@router.post("/notify/consultation")
+async def notify_hackathon_consultation(
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session)
+):
+    """Отправить уведомление о консультации хакатона всем участникам и менторам"""
+    user_roles_query = select(User2Roles).where(User2Roles.user_id == current_user.id)
+    user_roles = await session.execute(user_roles_query)
+    user_roles = user_roles.scalars().all()
+
+    is_admin = any(role.role_id == user_router_state.admin_role_id for role in user_roles)
+    is_organizer = any(role.role_id == user_router_state.organizer_role_id for role in user_roles)
+
+    if not (is_admin or is_organizer):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Доступ разрешен только для администраторов и организаторов"
+        )
+
+    background_tasks.add_task(send_hackathon_consultation_notification, session)
+
+    return {
+        "message": "Запущена рассылка уведомлений о консультации хакатона"
+    }

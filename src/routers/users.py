@@ -1,3 +1,4 @@
+import asyncio
 import os
 import uuid
 
@@ -18,7 +19,7 @@ from src.models.user import User2Roles, UserStatusHistory, UserStatusType
 from src.schemas.file import FileResponse
 from src.schemas.user import UserResponse, PaginatedUserResponse, ChangeUserStatusRequest, UpdateUserRolesRequest, \
     UpdateUserDocumentsRequest
-from src.utils.background_tasks import notify_active_teams, send_status_change_email
+from src.utils.background_tasks import send_status_change_email, send_team_confirmation_email
 from src.utils.router_states import team_router_state, user_router_state, file_router_state, stage_router_state
 from src.utils.stage_checker import check_stage
 
@@ -151,19 +152,19 @@ async def search_mentors(
                     )
                 )
             ),
-                not_(
-                    exists(
-                        select(1)
-                        .where(
-                            TeamMember.user_id == User.id,
-                            TeamMember.team_id.in_(current_user_team),
-                            or_(
-                                TeamMember.status_id == team_router_state.accepted_status_id,
-                                TeamMember.status_id == team_router_state.pending_status_id
-                            )
+            not_(
+                exists(
+                    select(1)
+                    .where(
+                        TeamMember.user_id == User.id,
+                        TeamMember.team_id.in_(current_user_team),
+                        or_(
+                            TeamMember.status_id == team_router_state.accepted_status_id,
+                            TeamMember.status_id == team_router_state.pending_status_id
                         )
                     )
                 )
+            )
         )
         .limit(limit)
         .offset(offset)
@@ -456,61 +457,63 @@ async def change_user_status(
     )
     session.add(new_status_history)
     user.current_status_id = status_id
+
     await session.flush()
-
-    background_tasks.add_task(
-        send_status_change_email,
-        user=user,
-        new_status=status_request.status.value,
-        comment=status_request.comment
-    )
-
-    if (old_status_id != status_id and
-            status_id == user_router_state.approved_status_id):
-
-        teams_query = (
-            select(Team)
-            .options(
-                selectinload(Team.members.and_(
-                    TeamMember.status_id == team_router_state.accepted_status_id
-                ))
-                .selectinload(TeamMember.user)
-                .selectinload(User.current_status),
-                selectinload(Team.members)
-                .selectinload(TeamMember.role),
-                selectinload(Team.members)
-                .selectinload(TeamMember.status)
-            )
-        )
-        result = await session.execute(teams_query)
-        teams = result.scalars().all()
-
-        active_teams = [team for team in teams if team.get_status() == "active"]
-        active_teams_count = len(active_teams)
-
-        if active_teams_count >= 20:
-            current_stage_query = select(Stage).where(Stage.is_active == True)
-            current_stage = await session.execute(current_stage_query)
-            current_stage = current_stage.scalar_one_or_none()
-
-            if current_stage and current_stage.type == StageType.REGISTRATION.value:
-                registration_closed_stage_query = (
-                    select(Stage)
-                    .where(Stage.type == StageType.REGISTRATION_CLOSED.value)
-                )
-                registration_closed_stage = await session.execute(registration_closed_stage_query)
-                registration_closed_stage = registration_closed_stage.scalar_one_or_none()
-
-                if registration_closed_stage:
-                    current_stage.is_active = False
-                    registration_closed_stage.is_active = True
-                    await stage_router_state.initialize(session)
-
-                    background_tasks.add_task(notify_active_teams, session)
-
     await session.commit()
-    await session.refresh(user)
 
+    async with AsyncSession(session.bind) as new_session:
+        await asyncio.sleep(0.5)
+
+        if (old_status_id != status_id and
+                status_id == user_router_state.approved_status_id):
+
+            teams_query = (
+                select(Team)
+                .options(
+                    selectinload(Team.members)
+                    .selectinload(TeamMember.user)
+                    .selectinload(User.current_status),
+                    selectinload(Team.members)
+                    .selectinload(TeamMember.role),
+                    selectinload(Team.members)
+                    .selectinload(TeamMember.status)
+                )
+            )
+            result = await new_session.execute(teams_query)
+            teams = result.scalars().all()
+
+            for team in teams:
+                await new_session.refresh(team)
+                for member in team.members:
+                    await new_session.refresh(member)
+                    await new_session.refresh(member.user)
+
+            active_teams = [team for team in teams if team.get_status() == "active"]
+            active_teams_count = len(active_teams)
+            print('\n', active_teams_count, '\n')
+
+            if active_teams_count >= 20:
+                current_stage_query = select(Stage).where(Stage.is_active == True)
+                current_stage = await new_session.execute(current_stage_query)
+                current_stage = current_stage.scalar_one_or_none()
+
+                if current_stage and current_stage.type == StageType.REGISTRATION.value:
+                    registration_closed_stage_query = (
+                        select(Stage)
+                        .where(Stage.type == StageType.REGISTRATION_CLOSED.value)
+                    )
+                    registration_closed_stage = await new_session.execute(registration_closed_stage_query)
+                    registration_closed_stage = registration_closed_stage.scalar_one_or_none()
+
+                    if registration_closed_stage:
+                        current_stage.is_active = False
+                        registration_closed_stage.is_active = True
+                        await stage_router_state.initialize(new_session)
+
+                        background_tasks.add_task(send_team_confirmation_email, new_session)
+                        await new_session.commit()
+
+    await session.refresh(user)
     return user
 
 
