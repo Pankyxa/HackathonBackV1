@@ -170,7 +170,8 @@ async def get_team_evaluations(
             criterion_5=eval.criterion_5,
             created_at=eval.created_at,
             updated_at=eval.updated_at,
-            total_score=eval.get_total_score()
+            total_score=eval.get_total_score(),
+            solution_link=eval.team.solution_link,
         )
         for eval in evaluations
     ]
@@ -286,7 +287,8 @@ async def get_judge_evaluations(
             criterion_5=eval.criterion_5,
             created_at=eval.created_at,
             updated_at=eval.updated_at,
-            total_score=eval.get_total_score()
+            total_score=eval.get_total_score(),
+            solution_link=eval.team.solution_link
         )
         for eval in evaluations
     ]

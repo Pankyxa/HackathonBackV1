@@ -7,6 +7,7 @@ from src.db import engine
 from src.init_db import init_models
 from src.routers import auth_router, teams_router, users_router, files_router, stages_router
 from src.routers import auth_router, teams_router, users_router, files_router, evaluations_router
+from src.utils.background_tasks import scheduler
 from src.utils.enum_utils import initialize_enum_data
 from src.utils.router_states import initialize_router_states
 
@@ -20,9 +21,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://hackathon.tyuiu.ru",
-        "http://localhost:5173",
-        "http://localhost:5174"
+        "*"
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -43,6 +42,7 @@ async def startup_event():
     async with AsyncSession(engine) as session:
         await initialize_enum_data(session)
         await initialize_router_states(session)
+    scheduler.start()
 
 def custom_openapi():
     if app.openapi_schema:

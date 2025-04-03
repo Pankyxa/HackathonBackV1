@@ -41,6 +41,7 @@ class TeamResponse(BaseModel):
     team_leader_id: UUID
     logo_file_id: UUID | None
     status_details: TeamStatusDetails
+    solution_link: Optional[str] = None  # Добавляем это поле
 
     @property
     def get_status_details(self) -> TeamStatusDetails:
@@ -59,6 +60,7 @@ class TeamResponse(BaseModel):
                     "team_motto": "Together we achieve more",
                     "team_leader_id": "123e4567-e89b-12d3-a456-426614174001",
                     "logo_file_id": "123e4567-e89b-12d3-a456-426614174002",
+                    "solution_link": "https://example.com/solution",
                     "status_details": {
                         "status": "active",
                         "can_participate": True,

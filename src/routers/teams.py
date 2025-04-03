@@ -698,7 +698,8 @@ async def get_team(
         team_motto=team.team_motto,
         team_leader_id=team.team_leader_id,
         logo_file_id=team.logo_file_id,
-        status_details=TeamStatusDetails(**team.get_status_details())
+        status_details=TeamStatusDetails(**team.get_status_details()),
+        solution_link=team.solution_link
     )
 
 
@@ -746,13 +747,15 @@ async def get_my_team(
             detail="Команда не найдена"
         )
 
+
     return TeamResponse(
         id=team.id,
         team_name=team.team_name,
         team_motto=team.team_motto,
         team_leader_id=team.team_leader_id,
         logo_file_id=team.logo_file_id,
-        status_details=TeamStatusDetails(**team.get_status_details())
+        status_details=TeamStatusDetails(**team.get_status_details()),
+        solution_link=team.solution_link
     )
 
 
@@ -812,7 +815,8 @@ async def get_mentor_teams(
             team_motto=team.team_motto,
             team_leader_id=team.team_leader_id,
             logo_file_id=team.logo_file_id,
-            status_details=TeamStatusDetails(**team.get_status_details())
+            status_details=TeamStatusDetails(**team.get_status_details()),
+            solution_link=team.solution_link
         )
         for team in teams
     ]
@@ -891,7 +895,8 @@ async def get_admin_teams(
                 team_motto=team.team_motto,
                 team_leader_id=team.team_leader_id,
                 logo_file_id=team.logo_file_id,
-                status_details=TeamStatusDetails(**team.get_status_details())
+                status_details=TeamStatusDetails(**team.get_status_details()),
+                solution_link=team.solution_link
             )
             for team in teams
         ],
@@ -990,7 +995,8 @@ async def get_mentor_team(
         team_motto=team.team_motto,
         team_leader_id=team.team_leader_id,
         logo_file_id=team.logo_file_id,
-        status_details=TeamStatusDetails(**team.get_status_details())
+        status_details=TeamStatusDetails(**team.get_status_details()),
+        solution_link=team.solution_link
     )
 
 
@@ -1770,3 +1776,49 @@ async def send_judge_briefing(
     background_tasks.add_task(send_single_judge_briefing_notification, user)
 
     return {"message": f"Уведомление о брифинге поставлено в очередь для отправки пользователю {user.email}"}
+
+
+@router.put("/{team_id}/solution-link")
+async def update_solution_link(
+        team_id: UUID,
+        solution_link: str = Form(...),
+        current_user: User = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session)
+):
+    """Обновить ссылку на решение команды"""
+    await check_stage(session, [StageType.TASK_DISTRIBUTION, StageType.SOLUTION_SUBMISSION])
+
+    team_query = select(Team).where(Team.id == team_id)
+    team = await session.execute(team_query)
+    team = team.scalar_one_or_none()
+
+    if not team:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Команда не найдена"
+        )
+
+    # Проверяем, является ли пользователь участником команды
+    member_query = select(TeamMember).where(
+        TeamMember.team_id == team_id,
+        TeamMember.user_id == current_user.id,
+        TeamMember.status_id == team_router_state.accepted_status_id
+    )
+    member = await session.execute(member_query)
+    member = member.scalar_one_or_none()
+
+    if not member:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Вы не являетесь участником этой команды"
+        )
+
+    # Обновляем ссылку на решение
+    team.solution_link = solution_link
+    await session.commit()
+    await session.refresh(team)
+
+    return {
+        "message": "Ссылка на решение успешно обновлена",
+        "solution_link": team.solution_link
+    }

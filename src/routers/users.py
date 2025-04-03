@@ -490,7 +490,6 @@ async def change_user_status(
 
             active_teams = [team for team in teams if team.get_status() == "active"]
             active_teams_count = len(active_teams)
-            print('\n', active_teams_count, '\n')
 
             if active_teams_count >= 20:
                 current_stage_query = select(Stage).where(Stage.is_active == True)

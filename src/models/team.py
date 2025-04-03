@@ -10,18 +10,6 @@ from src.db import Base
 from . import File, TeamMemberStatus, UserStatus, TeamRole
 
 
-from datetime import datetime
-from typing import List, Optional
-
-from sqlalchemy import Column, String, ForeignKey, DateTime
-from sqlalchemy.orm import relationship
-from sqlalchemy.dialects.postgresql import UUID
-import uuid
-
-from src.db import Base
-from . import File, TeamMemberStatus, UserStatus, TeamRole
-
-
 class Team(Base):
     """Модель команды"""
     __tablename__ = 'teams'
@@ -31,6 +19,7 @@ class Team(Base):
     team_motto = Column(String(255), nullable=False)
     team_leader_id = Column(UUID(as_uuid=True), ForeignKey('users.id'), nullable=False)
     logo_file_id = Column(UUID(as_uuid=True), ForeignKey('files.id'), nullable=True)
+    solution_link = Column(String(1024), nullable=True)
 
     # Relationships
     team_leader = relationship("User", back_populates="teams_as_leader")

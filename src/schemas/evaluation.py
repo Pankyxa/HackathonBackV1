@@ -26,6 +26,7 @@ class TeamEvaluationResponse(TeamEvaluationBase):
     created_at: datetime
     updated_at: Optional[datetime]
     total_score: int
+    solution_link: Optional[str] = None
 
     class Config:
         from_attributes = True
