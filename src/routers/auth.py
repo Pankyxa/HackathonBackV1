@@ -133,7 +133,6 @@ async def register(
     verification_link = f"{settings.base_url}/auth/verify-email/{verification_token.token}"
 
     background_tasks.add_task(send_registration_confirmation_email, user, verification_link)
-    background_tasks.add_task(send_single_hackathon_consultation_notification, user)
 
     await session.commit()
 
@@ -237,7 +236,6 @@ async def register_mentor(
     verification_link = f"{settings.base_url}/auth/verify-email/{verification_token}"
 
     background_tasks.add_task(send_registration_confirmation_email, user, verification_link)
-    background_tasks.add_task(send_single_hackathon_consultation_notification, user)
 
     await session.commit()
 
