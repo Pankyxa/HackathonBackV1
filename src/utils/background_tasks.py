@@ -1026,6 +1026,161 @@ async def send_registration_closed_notification(session: AsyncSession):
     """)
 
 
+async def send_task_update_notification(session: AsyncSession):
+    """
+    Отправляет уведомление о публикации дополнения к исходным данным
+    всем участникам активных команд
+    """
+    logging.info("Начинаю рассылку уведомлений о дополнении к исходным данным")
+    start_time = datetime.now()
+
+    teams_query = (
+        select(Team)
+        .options(
+            selectinload(Team.members)
+            .selectinload(TeamMember.user)
+            .selectinload(User.current_status),
+            selectinload(Team.members)
+            .selectinload(TeamMember.role),
+            selectinload(Team.members)
+            .selectinload(TeamMember.status)
+        )
+    )
+    result = await session.execute(teams_query)
+    teams = result.scalars().all()
+
+    active_teams = [team for team in teams if team.get_status() == "active"]
+    total_teams = len(active_teams)
+    successful_sends = 0
+    failed_sends = 0
+
+    logging.info(f"Найдено активных команд: {total_teams}")
+
+    for i, team in enumerate(active_teams, 1):
+        logging.info(f"Обработка команды {i}/{total_teams}: {team.team_name}")
+
+        team_members = [
+            member for member in team.members
+            if member.status_id == team_router_state.accepted_status_id
+        ]
+
+        for member in team_members:
+            html_content = f"""
+            <!DOCTYPE html>
+            <html>
+                <head>
+                    <meta charset="utf-8">
+                    <!-- Стили -->
+                    <style>
+                        body {{
+                            margin: 0;
+                            padding: 0;
+                            background-color: #f4f4f4;
+                            font-family: Arial, sans-serif;
+                        }}
+                    </style>
+                </head>
+                <body>
+                    <table border="0" cellpadding="0" cellspacing="0" width="100%">
+                        <tr>
+                            <td align="center" style="padding: 40px 0;">
+                                <table border="0" cellpadding="0" cellspacing="0" width="600" style="background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                                    <tr>
+                                        <td style="padding: 40px 30px;">
+                                            <!-- Header -->
+                                            <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin-bottom: 30px;">
+                                                <tr>
+                                                    <td align="center">
+                                                        <h1 style="color: #2196F3; font-size: 24px; margin: 0;">Дополнение к исходным данным</h1>
+                                                    </td>
+                                                </tr>
+                                            </table>
+
+                                            <!-- Content -->
+                                            <table border="0" cellpadding="0" cellspacing="0" width="100%">
+                                                <tr>
+                                                    <td align="center" style="padding: 0 0 20px 0;">
+                                                        <p style="margin: 0;">Здравствуйте, {member.user.full_name}!</p>
+                                                    </td>
+                                                </tr>
+                                                <tr>
+                                                    <td align="center" style="padding: 0 0 20px 0;">
+                                                        <p style="margin: 0;">На сайте хакатона опубликовано дополнение к исходным данным. Ознакомьтесь с обновленной информацией в личном кабинете.</p>
+                                                    </td>
+                                                </tr>
+                                                <tr>
+                                                    <td align="center" style="padding: 20px 0;">
+                                                        <table border="0" cellpadding="0" cellspacing="0">
+                                                            <tr>
+                                                                <td align="center" bgcolor="#2196F3" style="border-radius: 4px;">
+                                                                    <a href="{settings.base_url}/profile/team" 
+                                                                       style="display: inline-block; padding: 12px 24px; color: #ffffff; text-decoration: none; font-weight: bold;">
+                                                                        Перейти к дополнению
+                                                                    </a>
+                                                                </td>
+                                                            </tr>
+                                                        </table>
+                                                    </td>
+                                                </tr>
+                                                <tr>
+                                                    <td align="center" style="padding: 0 0 20px 0;">
+                                                        <p style="margin: 0;">Команда: {team.team_name}</p>
+                                                    </td>
+                                                </tr>
+                                            </table>
+
+                                            <!-- Footer -->
+                                            <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin-top: 30px;">
+                                                <tr>
+                                                    <td align="center" style="color: #666666; font-size: 14px;">
+                                                        <p style="margin: 0;">Это автоматическое уведомление, пожалуйста, не отвечайте на него.</p>
+                                                    </td>
+                                                </tr>
+                                            </table>
+                                        </td>
+                                    </tr>
+                                </table>
+                            </td>
+                        </tr>
+                    </table>
+                </body>
+            </html>
+            """
+
+            try:
+                success = email_sender.send_email(
+                    to_email=member.user.email,
+                    subject="Опубликовано дополнение к исходным данным",
+                    body=html_content,
+                    is_html=True
+                )
+                if success:
+                    successful_sends += 1
+                    logging.info(
+                        f"[Команда {i}/{total_teams}] Отправлено уведомление участнику {member.user.full_name} ({member.user.email})")
+                else:
+                    failed_sends += 1
+                    logging.error(
+                        f"[Команда {i}/{total_teams}] Ошибка отправки участнику {member.user.full_name} ({member.user.email})")
+            except Exception as e:
+                failed_sends += 1
+                logging.error(
+                    f"[Команда {i}/{total_teams}] Исключение при отправке участнику {member.user.full_name} ({member.user.email}): {str(e)}")
+
+            await asyncio.sleep(2)
+
+    end_time = datetime.now()
+    duration = (end_time - start_time).total_seconds()
+
+    logging.info(f"""
+Рассылка уведомлений о дополнении к исходным данным завершена!
+Время выполнения: {duration:.2f} секунд
+Всего команд: {total_teams}
+Успешно отправлено: {successful_sends}
+Ошибок отправки: {failed_sends}
+    """)
+
+
 async def check_and_close_registration():
     """
     Меняет stage с registration на registration_closed и отправляет уведомления
