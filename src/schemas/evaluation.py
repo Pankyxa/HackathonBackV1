@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
 from uuid import UUID
 from pydantic import BaseModel, Field
 
@@ -48,3 +48,33 @@ class UnevaluatedTeam(BaseModel):
     team_id: UUID
     team_name: str
     team_motto: str
+
+
+class JudgeEvaluation(BaseModel):
+    judge_id: UUID
+    judge_name: str
+    judge_email: str
+    criterion_1: Optional[int] = None
+    criterion_2: Optional[int] = None
+    criterion_3: Optional[int] = None
+    criterion_4: Optional[int] = None
+    criterion_5: Optional[int] = None
+    total_score: Optional[int] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class DetailedTeamEvaluationResponse(BaseModel):
+    team_id: UUID
+    team_name: str
+    team_motto: str
+    solution_link: Optional[str] = None
+    evaluations_count: int
+    total_score: float
+    evaluations: List[JudgeEvaluation]
+
+    class Config:
+        from_attributes = True

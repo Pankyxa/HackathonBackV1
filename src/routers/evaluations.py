@@ -14,7 +14,7 @@ from src.models.evaluation import TeamEvaluation
 from src.schemas.evaluation import (
     TeamEvaluationCreate,
     TeamEvaluationResponse,
-    TeamTotalScore, UnevaluatedTeam
+    TeamTotalScore, UnevaluatedTeam, DetailedTeamEvaluationResponse
 )
 from src.utils.router_states import user_router_state
 
@@ -350,3 +350,122 @@ async def get_unevaluated_teams(
     ]
 
     return participating_teams
+
+
+@router.get("/detailed", response_model=List[DetailedTeamEvaluationResponse])
+async def get_detailed_evaluations(
+        current_user: User = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session)
+):
+    """
+    Получение детальной информации об оценках всех команд всеми судьями.
+    Доступно только для администраторов и организаторов.
+    """
+    user_roles_query = select(User2Roles).where(User2Roles.user_id == current_user.id)
+    user_roles = await session.execute(user_roles_query)
+    user_roles = user_roles.scalars().all()
+
+    is_admin = any(role.role_id == user_router_state.admin_role_id for role in user_roles)
+    is_organizer = any(role.role_id == user_router_state.organizer_role_id for role in user_roles)
+
+    if not (is_admin or is_organizer):
+        raise HTTPException(
+            status_code=403,
+            detail="Only administrators and organizers can view detailed evaluations"
+        )
+
+    teams_query = (
+        select(Team)
+        .options(
+            selectinload(Team.members)
+            .selectinload(TeamMember.user)
+            .selectinload(User.current_status),
+            selectinload(Team.members)
+            .selectinload(TeamMember.role),
+            selectinload(Team.members)
+            .selectinload(TeamMember.status)
+        )
+    )
+    teams = await session.execute(teams_query)
+    teams = teams.scalars().all()
+
+    judges_query = (
+        select(User)
+        .join(User2Roles)
+        .where(User2Roles.role_id == user_router_state.judge_role_id)
+    )
+    judges = await session.execute(judges_query)
+    judges = judges.scalars().all()
+
+    evaluations_query = (
+        select(TeamEvaluation)
+        .options(
+            selectinload(TeamEvaluation.judge),
+            selectinload(TeamEvaluation.team)
+        )
+    )
+    evaluations = await session.execute(evaluations_query)
+    evaluations = evaluations.scalars().all()
+
+    evaluation_map = {}
+    for eval in evaluations:
+        key = (str(eval.team_id), str(eval.judge_id))
+        if key not in evaluation_map or eval.created_at > evaluation_map[key].created_at:
+            evaluation_map[key] = eval
+
+    detailed_evaluations = []
+    for team in teams:
+        if team.can_participate():
+            team_evaluations = []
+            team_total_score = 0
+            evaluations_count = 0
+
+            for judge in judges:
+                key = (str(team.id), str(judge.id))
+                evaluation = evaluation_map.get(key)
+
+                if evaluation:
+                    evaluations_count += 1
+                    score = evaluation.get_total_score()
+                    team_total_score += score
+                    team_evaluations.append({
+                        "judge_id": judge.id,
+                        "judge_name": judge.full_name,
+                        "judge_email": judge.email,
+                        "criterion_1": evaluation.criterion_1,
+                        "criterion_2": evaluation.criterion_2,
+                        "criterion_3": evaluation.criterion_3,
+                        "criterion_4": evaluation.criterion_4,
+                        "criterion_5": evaluation.criterion_5,
+                        "total_score": score,
+                        "created_at": evaluation.created_at,
+                        "updated_at": evaluation.updated_at
+                    })
+                else:
+                    team_evaluations.append({
+                        "judge_id": judge.id,
+                        "judge_name": judge.full_name,
+                        "judge_email": judge.email,
+                        "criterion_1": 0,
+                        "criterion_2": 0,
+                        "criterion_3": 0,
+                        "criterion_4": 0,
+                        "criterion_5": 0,
+                        "total_score": 0,
+                        "created_at": None,
+                        "updated_at": None
+                    })
+
+            detailed_evaluations.append({
+                "team_id": team.id,
+                "team_name": team.team_name,
+                "team_motto": team.team_motto,
+                "solution_link": team.solution_link,
+                "evaluations_count": evaluations_count,
+                "total_score": team_total_score,
+                "evaluations": team_evaluations
+            })
+
+    detailed_evaluations.sort(key=lambda x: x["total_score"], reverse=True)
+
+    return detailed_evaluations

@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List
 import asyncio
 
@@ -145,7 +145,6 @@ async def send_team_confirmation_email(session: AsyncSession):
                 logging.error(
                     f"[Команда {i}/{total_teams}] Исключение при отправке участнику {member.full_name} ({member.email}): {str(e)}")
 
-            # Добавляем задержку между отправками
             await asyncio.sleep(2)
 
     end_time = datetime.now()
@@ -331,7 +330,6 @@ async def send_status_change_email(user: User, new_status: str, comment: str = N
         "pending": "на рассмотрении",
         "approved": "одобрен",
         "need_update": "требует обновления",
-        # Для значений из enum
         "PENDING": "на рассмотрении",
         "APPROVED": "одобрен",
         "NEED_UPDATE": "требует обновления"
@@ -1181,6 +1179,625 @@ async def send_task_update_notification(session: AsyncSession):
     """)
 
 
+async def send_hackathon_opening_notification(session: AsyncSession):
+    """
+    Отправляет уведомление об открытии хакатона всем участникам активных команд
+    """
+    teams_query = (
+        select(Team)
+        .options(
+            selectinload(Team.members)
+            .selectinload(TeamMember.user)
+            .selectinload(User.current_status),
+            selectinload(Team.members)
+            .selectinload(TeamMember.role),
+            selectinload(Team.members)
+            .selectinload(TeamMember.status)
+        )
+    )
+    result = await session.execute(teams_query)
+    teams = result.scalars().all()
+
+    active_teams = [team for team in teams if team.get_status() == "active"]
+    total_teams = len(active_teams)
+    successful_sends = 0
+    failed_sends = 0
+
+    logging.info(f"Начало рассылки уведомлений об открытии хакатона. Всего команд: {total_teams}")
+    start_time = datetime.now()
+
+    for i, team in enumerate(active_teams, 1):
+        logging.info(f"Обработка команды {i}/{total_teams}: {team.team_name}")
+
+        team_members = [
+            member.user for member in team.members
+            if member.status_id == team_router_state.accepted_status_id
+        ]
+
+        for member in team_members:
+            html_content = f"""
+            <!DOCTYPE html>
+            <html>
+                <head>
+                    <meta charset="utf-8">
+                    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                </head>
+                <body style="margin: 0; padding: 0; background-color: #f5f5f5;">
+                    <table border="0" cellpadding="0" cellspacing="0" width="100%" style="font-family: Arial, sans-serif;">
+                        <tr>
+                            <td align="center" style="padding: 20px 0;">
+                                <table border="0" cellpadding="0" cellspacing="0" width="600" style="background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);">
+                                    <tr>
+                                        <td align="center" style="padding: 40px 30px;">
+                                            <!-- Header -->
+                                            <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin-bottom: 30px;">
+                                                <tr>
+                                                    <td align="center">
+                                                        <h1 style="color: #2196F3; font-size: 24px; margin: 0;">Открытие хакатона</h1>
+                                                    </td>
+                                                </tr>
+                                            </table>
+
+                                            <!-- Content -->
+                                            <table border="0" cellpadding="0" cellspacing="0" width="100%">
+                                                <tr>
+                                                    <td align="center" style="padding: 0 0 20px 0;">
+                                                        <p style="margin: 0;">Здравствуйте, {member.full_name}!</p>
+                                                    </td>
+                                                </tr>
+                                                <tr>
+                                                    <td align="center" style="padding: 0 0 20px 0;">
+                                                        <p style="margin: 0;">Приглашаем вас на онлайн-открытие хакатона, которое состоится завтра, <strong>9 апреля, в 9:00 по Московскому времени</strong>.</p>
+                                                    </td>
+                                                </tr>
+                                                <tr>
+                                                    <td align="center" style="padding: 20px 0;">
+                                                        <table border="0" cellpadding="0" cellspacing="0">
+                                                            <tr>
+                                                                <td align="center" bgcolor="#2196F3" style="border-radius: 4px;">
+                                                                    <a href="https://bigbb2.tyuiu.ru/b/hyc-sjb-5lk-prq" 
+                                                                       style="display: inline-block; padding: 12px 24px; color: #ffffff; text-decoration: none; font-weight: bold;">
+                                                                        Присоединиться к открытию
+                                                                    </a>
+                                                                </td>
+                                                            </tr>
+                                                        </table>
+                                                    </td>
+                                                </tr>
+                                                <tr>
+                                                    <td align="center" style="padding: 0 0 20px 0;">
+                                                        <p style="margin: 0;">Или перейдите по ссылке: <a href="https://bigbb2.tyuiu.ru/b/hyc-sjb-5lk-prq" style="color: #2196F3;">https://bigbb2.tyuiu.ru/b/hyc-sjb-5lk-prq</a></p>
+                                                    </td>
+                                                </tr>
+                                                <tr>
+                                                    <td align="center" style="padding: 0 0 20px 0;">
+                                                        <p style="margin: 0;">Команда: {team.team_name}</p>
+                                                    </td>
+                                                </tr>
+                                            </table>
+
+                                            <!-- Footer -->
+                                            <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin-top: 30px;">
+                                                <tr>
+                                                    <td align="center" style="color: #666666; font-size: 14px;">
+                                                        <p style="margin: 0;">Это автоматическое уведомление, пожалуйста, не отвечайте на него.</p>
+                                                    </td>
+                                                </tr>
+                                            </table>
+                                        </td>
+                                    </tr>
+                                </table>
+                            </td>
+                        </tr>
+                    </table>
+                </body>
+            </html>
+            """
+
+            try:
+                success = email_sender.send_email(
+                    to_email=member.email,
+                    subject="Открытие хакатона",
+                    body=html_content,
+                    is_html=True
+                )
+                if success:
+                    successful_sends += 1
+                    logging.info(
+                        f"[Команда {i}/{total_teams}] Отправлено уведомление участнику {member.full_name} ({member.email})")
+                else:
+                    failed_sends += 1
+                    logging.error(
+                        f"[Команда {i}/{total_teams}] Ошибка отправки участнику {member.full_name} ({member.email})")
+            except Exception as e:
+                failed_sends += 1
+                logging.error(
+                    f"[Команда {i}/{total_teams}] Исключение при отправке участнику {member.full_name} ({member.email}): {str(e)}")
+
+            await asyncio.sleep(2)
+
+    end_time = datetime.now()
+    duration = (end_time - start_time).total_seconds()
+
+    logging.info(f"""
+Рассылка уведомлений об открытии хакатона завершена!
+Время выполнения: {duration:.2f} секунд
+Всего команд: {total_teams}
+Успешно отправлено: {successful_sends}
+Ошибок отправки: {failed_sends}
+""")
+
+
+async def send_hackathon_started_notification(session: AsyncSession):
+    """
+    Отправляет уведомление о начале хакатона и публикации тестовых данных
+    всем активным командам
+    """
+    teams_query = (
+        select(Team)
+        .options(
+            selectinload(Team.members)
+            .selectinload(TeamMember.user)
+            .selectinload(User.current_status),
+            selectinload(Team.members)
+            .selectinload(TeamMember.role),
+            selectinload(Team.members)
+            .selectinload(TeamMember.status)
+        )
+    )
+    result = await session.execute(teams_query)
+    teams = result.scalars().all()
+
+    active_teams = [team for team in teams if team.get_status() == "active"]
+    total_teams = len(active_teams)
+    successful_sends = 0
+    failed_sends = 0
+
+    logging.info(f"Начало рассылки уведомлений о старте хакатона. Всего команд: {total_teams}")
+    start_time = datetime.now()
+
+    for i, team in enumerate(active_teams, 1):
+        team_members = [
+            member.user for member in team.members
+            if member.status_id == team_router_state.accepted_status_id
+        ]
+
+        for member in team_members:
+            html_content = f"""
+            <!DOCTYPE html>
+            <html>
+                <head>
+                    <meta charset="utf-8">
+                    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                </head>
+                <body style="margin: 0; padding: 0; background-color: #f5f5f5;">
+                    <table border="0" cellpadding="0" cellspacing="0" width="100%" style="font-family: Arial, sans-serif;">
+                        <tr>
+                            <td align="center" style="padding: 20px 0;">
+                                <table border="0" cellpadding="0" cellspacing="0" width="600" style="background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);">
+                                    <tr>
+                                        <td align="center" style="padding: 40px 30px;">
+                                            <!-- Header -->
+                                            <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin-bottom: 30px;">
+                                                <tr>
+                                                    <td align="center">
+                                                        <h1 style="color: #2196F3; font-size: 24px; margin: 0;">Хакатон начался!</h1>
+                                                    </td>
+                                                </tr>
+                                            </table>
+
+                                            <!-- Content -->
+                                            <table border="0" cellpadding="0" cellspacing="0" width="100%">
+                                                <tr>
+                                                    <td align="center" style="padding: 0 0 20px 0;">
+                                                        <p style="margin: 0;">Здравствуйте, {member.full_name}!</p>
+                                                    </td>
+                                                </tr>
+                                                <tr>
+                                                    <td align="center" style="padding: 0 0 20px 0;">
+                                                        <p style="margin: 0;">Хакатон официально стартовал! В разделе "Моя команда" опубликованы тестовые данные для выполнения задания.</p>
+                                                    </td>
+                                                </tr>
+                                                <tr>
+                                                    <td align="center" style="padding: 0 0 20px 0;">
+                                                        <p style="margin: 0;">Желаем вашей команде продуктивной работы и успешного выполнения задания!</p>
+                                                    </td>
+                                                </tr>
+                                                <tr>
+                                                    <td align="center" style="padding: 20px 0;">
+                                                        <table border="0" cellpadding="0" cellspacing="0">
+                                                            <tr>
+                                                                <td align="center" bgcolor="#2196F3" style="border-radius: 4px;">
+                                                                    <a href="{settings.base_url}/profile/team" 
+                                                                       style="display: inline-block; padding: 12px 24px; color: #ffffff; text-decoration: none; font-weight: bold;">
+                                                                        Перейти к тестовым данным
+                                                                    </a>
+                                                                </td>
+                                                            </tr>
+                                                        </table>
+                                                    </td>
+                                                </tr>
+                                                <tr>
+                                                    <td align="center" style="padding: 0 0 20px 0;">
+                                                        <p style="margin: 0;">Команда: {team.team_name}</p>
+                                                    </td>
+                                                </tr>
+                                            </table>
+
+                                            <!-- Footer -->
+                                            <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin-top: 30px;">
+                                                <tr>
+                                                    <td align="center" style="color: #666666; font-size: 14px;">
+                                                        <p style="margin: 0;">Это автоматическое уведомление, пожалуйста, не отвечайте на него.</p>
+                                                    </td>
+                                                </tr>
+                                            </table>
+                                        </td>
+                                    </tr>
+                                </table>
+                            </td>
+                        </tr>
+                    </table>
+                </body>
+            </html>
+            """
+
+            try:
+                success = email_sender.send_email(
+                    to_email=member.email,
+                    subject="Хакатон начался! Опубликованы тестовые данные",
+                    body=html_content,
+                    is_html=True
+                )
+                if success:
+                    successful_sends += 1
+                    logging.info(
+                        f"[Команда {i}/{total_teams}] Отправлено уведомление участнику {member.full_name} ({member.email})")
+                else:
+                    failed_sends += 1
+                    logging.error(
+                        f"[Команда {i}/{total_teams}] Ошибка отправки участнику {member.full_name} ({member.email})")
+            except Exception as e:
+                failed_sends += 1
+                logging.error(
+                    f"[Команда {i}/{total_teams}] Исключение при отправке участнику {member.full_name} ({member.email}): {str(e)}")
+
+            await asyncio.sleep(2)
+
+    end_time = datetime.now()
+    duration = (end_time - start_time).total_seconds()
+
+    logging.info(f"""
+Рассылка уведомлений о начале хакатона завершена!
+Время выполнения: {duration:.2f} секунд
+Всего команд: {total_teams}
+Успешно отправлено: {successful_sends}
+Ошибок отправки: {failed_sends}
+""")
+
+
+async def send_solution_submission_notification(session: AsyncSession):
+    """
+    Отправляет уведомление о скором завершении хакатона
+    всем активным командам
+    """
+    teams_query = (
+        select(Team)
+        .options(
+            selectinload(Team.members)
+            .selectinload(TeamMember.user)
+            .selectinload(User.current_status),
+            selectinload(Team.members)
+            .selectinload(TeamMember.role),
+            selectinload(Team.members)
+            .selectinload(TeamMember.status)
+        )
+    )
+    result = await session.execute(teams_query)
+    teams = result.scalars().all()
+
+    active_teams = [team for team in teams if team.get_status() == "active"]
+    total_teams = len(active_teams)
+    successful_sends = 0
+    failed_sends = 0
+
+    logging.info(f"Начало рассылки уведомлений о завершении хакатона. Всего команд: {total_teams}")
+    start_time = datetime.now()
+
+    for i, team in enumerate(active_teams, 1):
+        team_members = [
+            member.user for member in team.members
+            if member.status_id == team_router_state.accepted_status_id
+        ]
+
+        for member in team_members:
+            html_content = f"""
+            <!DOCTYPE html>
+            <html>
+                <head>
+                    <meta charset="utf-8">
+                    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                </head>
+                <body style="margin: 0; padding: 0; background-color: #f5f5f5;">
+                    <table border="0" cellpadding="0" cellspacing="0" width="100%" style="font-family: Arial, sans-serif;">
+                        <tr>
+                            <td align="center" style="padding: 20px 0;">
+                                <table border="0" cellpadding="0" cellspacing="0" width="600" style="background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);">
+                                    <tr>
+                                        <td align="center" style="padding: 40px 30px;">
+                                            <!-- Header -->
+                                            <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin-bottom: 30px;">
+                                                <tr>
+                                                    <td align="center">
+                                                        <h1 style="color: #2196F3; font-size: 24px; margin: 0;">Завершение хакатона через 30 минут</h1>
+                                                    </td>
+                                                </tr>
+                                            </table>
+
+                                            <!-- Content -->
+                                            <table border="0" cellpadding="0" cellspacing="0" width="100%">
+                                                <tr>
+                                                    <td align="center" style="padding: 0 0 20px 0;">
+                                                        <p style="margin: 0;">Здравствуйте, {member.full_name}!</p>
+                                                    </td>
+                                                </tr>
+                                                <tr>
+                                                    <td align="center" style="padding: 0 0 20px 0;">
+                                                        <p style="margin: 0;">До окончания хакатона осталось менее 30 минут. Просим вас убедиться, что все материалы вашего решения прикреплены в личном кабинете.</p>
+                                                    </td>
+                                                </tr>
+                                                <tr>
+                                                    <td align="center" style="padding: 20px 0;">
+                                                        <table border="0" cellpadding="0" cellspacing="0">
+                                                            <tr>
+                                                                <td align="center" bgcolor="#2196F3" style="border-radius: 4px;">
+                                                                    <a href="{settings.base_url}/profile/team" 
+                                                                       style="display: inline-block; padding: 12px 24px; color: #ffffff; text-decoration: none; font-weight: bold;">
+                                                                        Перейти в личный кабинет
+                                                                    </a>
+                                                                </td>
+                                                            </tr>
+                                                        </table>
+                                                    </td>
+                                                </tr>
+                                                <tr>
+                                                    <td align="center" style="padding: 0 0 20px 0;">
+                                                        <p style="margin: 0;">Команда: {team.team_name}</p>
+                                                    </td>
+                                                </tr>
+                                            </table>
+
+                                            <!-- Footer -->
+                                            <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin-top: 30px;">
+                                                <tr>
+                                                    <td align="center" style="color: #666666; font-size: 14px;">
+                                                        <p style="margin: 0;">Это автоматическое уведомление, пожалуйста, не отвечайте на него.</p>
+                                                    </td>
+                                                </tr>
+                                            </table>
+                                        </td>
+                                    </tr>
+                                </table>
+                            </td>
+                        </tr>
+                    </table>
+                </body>
+            </html>
+            """
+
+            try:
+                success = email_sender.send_email(
+                    to_email=member.email,
+                    subject="Завершение хакатона через 30 минут",
+                    body=html_content,
+                    is_html=True
+                )
+                if success:
+                    successful_sends += 1
+                    logging.info(
+                        f"[Команда {i}/{total_teams}] Отправлено уведомление участнику {member.full_name} ({member.email})")
+                else:
+                    failed_sends += 1
+                    logging.error(
+                        f"[Команда {i}/{total_teams}] Ошибка отправки участнику {member.full_name} ({member.email})")
+            except Exception as e:
+                failed_sends += 1
+                logging.error(
+                    f"[Команда {i}/{total_teams}] Исключение при отправке участнику {member.full_name} ({member.email}): {str(e)}")
+
+            await asyncio.sleep(2)
+
+    end_time = datetime.now()
+    duration = (end_time - start_time).total_seconds()
+
+    logging.info(f"""
+Рассылка уведомлений о завершении хакатона завершена!
+Время выполнения: {duration:.2f} секунд
+Всего команд: {total_teams}
+Успешно отправлено: {successful_sends}
+Ошибок отправки: {failed_sends}
+""")
+
+
+async def send_hackathon_ended_notification(session: AsyncSession):
+    """
+    Отправляет уведомление о завершении хакатона
+    всем активным командам
+    """
+    teams_query = (
+        select(Team)
+        .options(
+            selectinload(Team.members)
+            .selectinload(TeamMember.user)
+            .selectinload(User.current_status),
+            selectinload(Team.members)
+            .selectinload(TeamMember.role),
+            selectinload(Team.members)
+            .selectinload(TeamMember.status)
+        )
+    )
+    result = await session.execute(teams_query)
+    teams = result.scalars().all()
+
+    active_teams = [team for team in teams if team.get_status() == "active"]
+    total_teams = len(active_teams)
+    successful_sends = 0
+    failed_sends = 0
+
+    logging.info(f"Начало рассылки уведомлений об окончании хакатона. Всего команд: {total_teams}")
+    start_time = datetime.now()
+
+    for i, team in enumerate(active_teams, 1):
+        team_members = [
+            member.user for member in team.members
+            if member.status_id == team_router_state.accepted_status_id
+        ]
+
+        for member in team_members:
+            html_content = f"""
+            <!DOCTYPE html>
+            <html>
+                <head>
+                    <meta charset="utf-8">
+                    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                </head>
+                <body style="margin: 0; padding: 0; background-color: #f5f5f5;">
+                    <table border="0" cellpadding="0" cellspacing="0" width="100%" style="font-family: Arial, sans-serif;">
+                        <tr>
+                            <td align="center" style="padding: 20px 0;">
+                                <table border="0" cellpadding="0" cellspacing="0" width="600" style="background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);">
+                                    <tr>
+                                        <td align="center" style="padding: 40px 30px;">
+                                            <!-- Header -->
+                                            <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin-bottom: 30px;">
+                                                <tr>
+                                                    <td align="center">
+                                                        <h1 style="color: #2196F3; font-size: 24px; margin: 0;">Хакатон завершен</h1>
+                                                    </td>
+                                                </tr>
+                                            </table>
+
+                                            <!-- Content -->
+                                            <table border="0" cellpadding="0" cellspacing="0" width="100%">
+                                                <tr>
+                                                    <td align="center" style="padding: 0 0 20px 0;">
+                                                        <p style="margin: 0;">Здравствуйте, {member.full_name}!</p>
+                                                    </td>
+                                                </tr>
+                                                <tr>
+                                                    <td align="center" style="padding: 0 0 20px 0;">
+                                                        <p style="margin: 0;">Хакатон официально завершен. В настоящее время жюри приступает к проверке решений команд.</p>
+                                                    </td>
+                                                </tr>
+                                                <tr>
+                                                    <td align="center" style="padding: 0 0 20px 0;">
+                                                        <p style="margin: 0;">Благодарим вас за участие! О результатах проверки и дальнейших шагах мы сообщим дополнительно.</p>
+                                                    </td>
+                                                </tr>
+                                                <tr>
+                                                    <td align="center" style="padding: 0 0 20px 0;">
+                                                        <p style="margin: 0;">Команда: {team.team_name}</p>
+                                                    </td>
+                                                </tr>
+                                            </table>
+
+                                            <!-- Footer -->
+                                            <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin-top: 30px;">
+                                                <tr>
+                                                    <td align="center" style="color: #666666; font-size: 14px;">
+                                                        <p style="margin: 0;">Это автоматическое уведомление, пожалуйста, не отвечайте на него.</p>
+                                                    </td>
+                                                </tr>
+                                            </table>
+                                        </td>
+                                    </tr>
+                                </table>
+                            </td>
+                        </tr>
+                    </table>
+                </body>
+            </html>
+            """
+
+            try:
+                success = email_sender.send_email(
+                    to_email=member.email,
+                    subject="Хакатон завершен",
+                    body=html_content,
+                    is_html=True
+                )
+                if success:
+                    successful_sends += 1
+                    logging.info(
+                        f"[Команда {i}/{total_teams}] Отправлено уведомление участнику {member.full_name} ({member.email})")
+                else:
+                    failed_sends += 1
+                    logging.error(
+                        f"[Команда {i}/{total_teams}] Ошибка отправки участнику {member.full_name} ({member.email})")
+            except Exception as e:
+                failed_sends += 1
+                logging.error(
+                    f"[Команда {i}/{total_teams}] Исключение при отправке участнику {member.full_name} ({member.email}): {str(e)}")
+
+            await asyncio.sleep(2)
+
+    end_time = datetime.now()
+    duration = (end_time - start_time).total_seconds()
+
+    logging.info(f"""
+Рассылка уведомлений об окончании хакатона завершена!
+Время выполнения: {duration:.2f} секунд
+Всего команд: {total_teams}
+Успешно отправлено: {successful_sends}
+Ошибок отправки: {failed_sends}
+""")
+
+
+async def check_and_start_hackathon():
+    """
+    Меняет stage на task_distribution (3 этап) и отправляет уведомления
+    """
+    logging.info("Смена этапа на task_distribution")
+
+    session: AsyncSession = await anext(get_session())
+
+    try:
+        result = await session.execute(
+            select(Stage).where(Stage.is_active == True)
+        )
+        current_stage = result.scalar_one_or_none()
+
+        if current_stage:
+            result = await session.execute(
+                select(Stage).where(Stage.type == StageType.TASK_DISTRIBUTION.value)
+            )
+            task_distribution_stage = result.scalar_one_or_none()
+
+            if task_distribution_stage:
+                await session.execute(
+                    update(Stage)
+                    .where(Stage.id == current_stage.id)
+                    .values(is_active=False)
+                )
+
+                task_distribution_stage.is_active = True
+
+                await session.commit()
+                logging.info("Этап успешно изменен на task_distribution")
+
+                await send_hackathon_started_notification(session)
+            else:
+                logging.error("Этап task_distribution не найден в базе данных")
+        else:
+            logging.warning("Активный этап не найден")
+    except Exception as e:
+        logging.error(f"Ошибки при изменении этапа: {str(e)}")
+        await session.rollback()
+        raise
+    finally:
+        await session.close()
+
+
 async def check_and_close_registration():
     """
     Меняет stage с registration на registration_closed и отправляет уведомления
@@ -1233,6 +1850,9 @@ async def check_and_close_registration():
 
 tz = pytz.timezone('Europe/Moscow')
 target_date = tz.localize(datetime(2025, 4, 4, 0, 0, 0))
+hackathon_start_date = tz.localize(datetime(2025, 4, 9, 9, 30, 0))
+solution_submission_date = tz.localize(datetime(2025, 4, 10, 9, 0, 0))
+solution_review_date = tz.localize(datetime(2025, 4, 10, 9, 30, 0))
 
 
 async def check_time_and_close_registration():
@@ -1251,6 +1871,43 @@ async def check_time_and_close_registration():
         logging.info(f"Целевая дата еще не достигнута. Ожидаю... Текущее время: {current_date}")
 
 
+async def check_time_and_start_hackathon():
+    """
+    Проверяет время и запускает хакатон, если наступила целевая дата.
+    При первом запуске рассчитывает точное время следующей проверки.
+    """
+    current_date = datetime.now(tz)
+    logging.info(f"Проверка времени для старта хакатона. Текущее: {current_date}, Цель: {hackathon_start_date}")
+
+    if current_date >= hackathon_start_date:
+        logging.info(f"Целевая дата {hackathon_start_date} достигнута. Выполняю запуск хакатона.")
+        await check_and_start_hackathon()
+        scheduler.remove_job('check_hackathon_start_time')
+        logging.info("Задача запуска хакатона выполнена и удалена из планировщика")
+    else:
+        # Рассчитываем время до следующей минуты
+        next_minute = current_date.replace(second=0, microsecond=0) + timedelta(minutes=1)
+        delay = (next_minute - current_date).total_seconds()
+
+        if delay > 0:
+            logging.info(f"Корректировка расписания. Следующая проверка через {delay:.2f} секунд")
+
+            # Удаляем текущее расписание
+            scheduler.remove_job('check_hackathon_start_time')
+
+            # Создаем новое расписание, начиная с следующей минуты
+            scheduler.add_job(
+                check_time_and_start_hackathon,
+                trigger=IntervalTrigger(minutes=1),
+                id='check_hackathon_start_time',
+                name='Check hackathon start time and switch stage',
+                next_run_time=next_minute,
+                replace_existing=True
+            )
+
+        logging.info(f"Целевая дата еще не достигнута. Следующая проверка в {next_minute}")
+
+
 scheduler = AsyncIOScheduler()
 
 scheduler.add_job(
@@ -1262,3 +1919,223 @@ scheduler.add_job(
 )
 
 logging.info(f"Scheduled registration close check job. Целевая дата: {target_date}")
+
+
+async def check_and_start_solution_submission():
+    """
+    Меняет stage на solution_submission (4 этап) и отправляет уведомления
+    """
+    logging.info("Смена этапа на solution_submission")
+
+    session: AsyncSession = await anext(get_session())
+
+    try:
+        result = await session.execute(
+            select(Stage).where(Stage.is_active == True)
+        )
+        current_stage = result.scalar_one_or_none()
+
+        if current_stage:
+            result = await session.execute(
+                select(Stage).where(Stage.type == StageType.SOLUTION_SUBMISSION.value)
+            )
+            solution_submission_stage = result.scalar_one_or_none()
+
+            if solution_submission_stage:
+                await session.execute(
+                    update(Stage)
+                    .where(Stage.id == current_stage.id)
+                    .values(is_active=False)
+                )
+
+                solution_submission_stage.is_active = True
+
+                await session.commit()
+                logging.info("Этап успешно изменен на solution_submission")
+
+                await send_solution_submission_notification(session)
+            else:
+                logging.error("Этап solution_submission не найден в базе данных")
+        else:
+            logging.warning("Активный этап не найден")
+    except Exception as e:
+        logging.error(f"Ошибки при изменении этапа: {str(e)}")
+        await session.rollback()
+        raise
+    finally:
+        await session.close()
+
+
+async def check_and_start_solution_submission():
+    """
+    Меняет stage на solution_submission (4 этап) и отправляет уведомления
+    """
+    logging.info("Смена этапа на solution_submission")
+
+    session: AsyncSession = await anext(get_session())
+
+    try:
+        result = await session.execute(
+            select(Stage).where(Stage.is_active == True)
+        )
+        current_stage = result.scalar_one_or_none()
+
+        if current_stage:
+            result = await session.execute(
+                select(Stage).where(Stage.type == StageType.SOLUTION_SUBMISSION.value)
+            )
+            solution_submission_stage = result.scalar_one_or_none()
+
+            if solution_submission_stage:
+                await session.execute(
+                    update(Stage)
+                    .where(Stage.id == current_stage.id)
+                    .values(is_active=False)
+                )
+
+                solution_submission_stage.is_active = True
+
+                await session.commit()
+                logging.info("Этап успешно изменен на solution_submission")
+
+                await send_solution_submission_notification(session)
+            else:
+                logging.error("Этап solution_submission не найден в базе данных")
+        else:
+            logging.warning("Активный этап не найден")
+    except Exception as e:
+        logging.error(f"Ошибки при изменении этапа: {str(e)}")
+        await session.rollback()
+        raise
+    finally:
+        await session.close()
+
+
+async def check_and_start_solution_review():
+    """
+    Меняет stage на solution_review (5 этап) и отправляет уведомления
+    """
+    logging.info("Смена этапа на solution_review")
+
+    session: AsyncSession = await anext(get_session())
+
+    try:
+        result = await session.execute(
+            select(Stage).where(Stage.is_active == True)
+        )
+        current_stage = result.scalar_one_or_none()
+
+        if current_stage:
+            result = await session.execute(
+                select(Stage).where(Stage.type == StageType.SOLUTION_REVIEW.value)
+            )
+            solution_review_stage = result.scalar_one_or_none()
+
+            if solution_review_stage:
+                await session.execute(
+                    update(Stage)
+                    .where(Stage.id == current_stage.id)
+                    .values(is_active=False)
+                )
+
+                solution_review_stage.is_active = True
+
+                await session.commit()
+                logging.info("Этап успешно изменен на solution_review")
+
+                await send_hackathon_ended_notification(session)
+            else:
+                logging.error("Этап solution_review не найден в базе данных")
+        else:
+            logging.warning("Активный этап не найден")
+    except Exception as e:
+        logging.error(f"Ошибки при изменении этапа: {str(e)}")
+        await session.rollback()
+        raise
+    finally:
+        await session.close()
+
+
+async def check_time_and_start_solution_submission():
+    """
+    Проверяет время и меняет этап на solution_submission, если наступила целевая дата
+    """
+    current_date = datetime.now(tz)
+    logging.info(
+        f"Проверка времени для этапа solution_submission. Текущее: {current_date}, Цель: {solution_submission_date}")
+
+    if current_date >= solution_submission_date:
+        logging.info(f"Целевая дата {solution_submission_date} достигнута. Выполняю смену этапа.")
+        await check_and_start_solution_submission()
+        scheduler.remove_job('check_solution_submission_time')
+        logging.info("Задача смены этапа на solution_submission выполнена и удалена из планировщика")
+    else:
+        next_minute = current_date.replace(second=0, microsecond=0) + timedelta(minutes=1)
+        delay = (next_minute - current_date).total_seconds()
+
+        if delay > 0:
+            scheduler.reschedule_job(
+                'check_solution_submission_time',
+                trigger=IntervalTrigger(minutes=1),
+                next_run_time=next_minute
+            )
+
+
+async def check_time_and_start_solution_review():
+    """
+    Проверяет время и меняет этап на solution_review, если наступила целевая дата
+    """
+    current_date = datetime.now(tz)
+    logging.info(f"Проверка времени для этапа solution_review. Текущее: {current_date}, Цель: {solution_review_date}")
+
+    if current_date >= solution_review_date:
+        logging.info(f"Целевая дата {solution_review_date} достигнута. Выполняю смену этапа.")
+        await check_and_start_solution_review()
+        scheduler.remove_job('check_solution_review_time')
+        logging.info("Задача смены этапа на solution_review выполнена и удалена из планировщика")
+    else:
+        next_minute = current_date.replace(second=0, microsecond=0) + timedelta(minutes=1)
+        delay = (next_minute - current_date).total_seconds()
+
+        if delay > 0:
+            scheduler.reschedule_job(
+                'check_solution_review_time',
+                trigger=IntervalTrigger(minutes=1),
+                next_run_time=next_minute
+            )
+
+
+initial_check_date = datetime.now(tz)
+next_minute = initial_check_date.replace(second=0, microsecond=0) + timedelta(minutes=1)
+
+scheduler.add_job(
+    check_time_and_start_hackathon,
+    trigger=IntervalTrigger(minutes=1),
+    id='check_hackathon_start_time',
+    name='Check hackathon start time and switch stage',
+    next_run_time=next_minute,
+    replace_existing=True
+)
+
+scheduler.add_job(
+    check_time_and_start_solution_submission,
+    trigger=IntervalTrigger(minutes=1),
+    id='check_solution_submission_time',
+    name='Check solution submission time and switch stage',
+    next_run_time=next_minute,
+    replace_existing=True
+)
+
+scheduler.add_job(
+    check_time_and_start_solution_review,
+    trigger=IntervalTrigger(minutes=1),
+    id='check_solution_review_time',
+    name='Check solution review time and switch stage',
+    next_run_time=next_minute,
+    replace_existing=True
+)
+
+logging.info(
+    f"Scheduled hackathon start check job. Целевая дата: {hackathon_start_date}, первая проверка в {next_minute}")
+logging.info(f"Scheduled solution submission check job. Целевая дата: {solution_submission_date}")
+logging.info(f"Scheduled solution review check job. Целевая дата: {solution_review_date}")

@@ -41,7 +41,7 @@ class TeamResponse(BaseModel):
     team_leader_id: UUID
     logo_file_id: UUID | None
     status_details: TeamStatusDetails
-    solution_link: Optional[str] = None  # Добавляем это поле
+    solution_link: Optional[str] = None
 
     @property
     def get_status_details(self) -> TeamStatusDetails:
