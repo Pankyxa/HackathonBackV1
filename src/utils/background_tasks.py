@@ -1753,6 +1753,127 @@ async def send_hackathon_ended_notification(session: AsyncSession):
 """)
 
 
+async def send_judge_opening_notification(session: AsyncSession):
+    """
+    Отправляет уведомление об очном открытии хакатона всем членам жюри
+    """
+    users_query = (
+        select(User)
+        .distinct()
+        .join(User2Roles)
+        .where(
+            User2Roles.role_id == user_router_state.judge_role_id
+        )
+    )
+
+    result = await session.execute(users_query)
+    users = result.scalars().all()
+
+    total_users = len(users)
+    successful_sends = 0
+    failed_sends = 0
+
+    logging.info(f"Начало рассылки уведомлений об очном открытии хакатона членам жюри. Всего получателей: {total_users}")
+    start_time = datetime.now()
+
+    for i, user in enumerate(users, 1):
+        html_content = f"""
+        <!DOCTYPE html>
+        <html>
+            <head>
+                <meta charset="utf-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            </head>
+            <body style="margin: 0; padding: 0; background-color: #f5f5f5;">
+                <table border="0" cellpadding="0" cellspacing="0" width="100%" style="font-family: Arial, sans-serif;">
+                    <tr>
+                        <td align="center" style="padding: 20px 0;">
+                            <table border="0" cellpadding="0" cellspacing="0" width="600" style="background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);">
+                                <tr>
+                                    <td align="center" style="padding: 40px 30px;">
+                                        <!-- Header -->
+                                        <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin-bottom: 30px;">
+                                            <tr>
+                                                <td align="center">
+                                                    <h1 style="color: #2196F3; font-size: 24px; margin: 0;">Очное открытие хакатона</h1>
+                                                </td>
+                                            </tr>
+                                        </table>
+
+                                        <!-- Content -->
+                                        <table border="0" cellpadding="0" cellspacing="0" width="100%">
+                                            <tr>
+                                                <td align="center" style="padding: 0 0 20px 0;">
+                                                    <p style="margin: 0;">Здравствуйте, {user.full_name}!</p>
+                                                </td>
+                                            </tr>
+                                            <tr>
+                                                <td align="center" style="padding: 0 0 20px 0;">
+                                                    <p style="margin: 0;">Приглашаем вас на очное открытие хакатона, которое состоится сегодня, <strong>в 10:30 по тюменскому времени</strong>.</p>
+                                                </td>
+                                            </tr>
+                                            <tr>
+                                                <td align="center" style="padding: 0 0 20px 0;">
+                                                    <p style="margin: 0;">Место проведения: <strong>ул. Володарского, 38, аудитория 237</strong></p>
+                                                </td>
+                                            </tr>
+                                            <tr>
+                                                <td align="center" style="padding: 0 0 20px 0;">
+                                                    <p style="margin: 0;">Просим вас прибыть за 10-15 минут до начала мероприятия.</p>
+                                                </td>
+                                            </tr>
+                                        </table>
+
+                                        <!-- Footer -->
+                                        <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin-top: 30px;">
+                                            <tr>
+                                                <td align="center" style="color: #666666; font-size: 14px;">
+                                                    <p style="margin: 0;">Это автоматическое уведомление, пожалуйста, не отвечайте на него.</p>
+                                                </td>
+                                            </tr>
+                                        </table>
+                                    </td>
+                                </tr>
+                            </table>
+                        </td>
+                    </tr>
+                </table>
+            </body>
+        </html>
+        """
+
+        try:
+            success = email_sender.send_email(
+                to_email=user.email,
+                subject="Очное открытие хакатона",
+                body=html_content,
+                is_html=True
+            )
+            if success:
+                successful_sends += 1
+                logging.info(f"[{i}/{total_users}] Отправлено уведомление на email: {user.email}")
+            else:
+                failed_sends += 1
+                logging.error(f"[{i}/{total_users}] Ошибка отправки на email: {user.email}")
+        except Exception as e:
+            failed_sends += 1
+            logging.error(f"[{i}/{total_users}] Исключение при отправке на email {user.email}: {str(e)}")
+
+        if i < total_users:
+            await asyncio.sleep(2)
+
+    end_time = datetime.now()
+    duration = (end_time - start_time).total_seconds()
+
+    logging.info(f"""
+Рассылка уведомлений об очном открытии хакатона завершена!
+Время выполнения: {duration:.2f} секунд
+Всего получателей: {total_users}
+Успешно: {successful_sends}
+Ошибок: {failed_sends}
+    """)
+
+
 async def check_and_start_hackathon():
     """
     Меняет stage на task_distribution (3 этап) и отправляет уведомления
