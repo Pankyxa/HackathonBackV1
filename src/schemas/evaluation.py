@@ -48,6 +48,7 @@ class UnevaluatedTeam(BaseModel):
     team_id: UUID
     team_name: str
     team_motto: str
+    solution_link: Optional[str] = None
 
 
 class JudgeEvaluation(BaseModel):

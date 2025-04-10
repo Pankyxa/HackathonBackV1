@@ -313,7 +313,12 @@ async def get_unevaluated_teams(
         for role in user_roles
     )
 
-    if not is_judge:
+    is_admin = any(
+        role.role_id == user_router_state.admin_role_id
+        for role in user_roles
+    )
+
+    if not is_judge and not is_admin:
         raise HTTPException(status_code=403, detail="Only judges can access this endpoint")
 
     evaluated_teams_subquery = (
@@ -343,7 +348,8 @@ async def get_unevaluated_teams(
         UnevaluatedTeam(
             team_id=team.id,
             team_name=team.team_name,
-            team_motto=team.team_motto
+            team_motto=team.team_motto,
+            solution_link=team.solution_link
         )
         for team in teams
         if team.can_participate()
