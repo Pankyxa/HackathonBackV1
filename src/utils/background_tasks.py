@@ -2017,27 +2017,27 @@ async def check_time_and_start_hackathon():
             scheduler.remove_job('check_hackathon_start_time')
 
             # Создаем новое расписание, начиная с следующей минуты
-            scheduler.add_job(
-                check_time_and_start_hackathon,
-                trigger=IntervalTrigger(minutes=1),
-                id='check_hackathon_start_time',
-                name='Check hackathon start time and switch stage',
-                next_run_time=next_minute,
-                replace_existing=True
-            )
+            # scheduler.add_job(
+            #     check_time_and_start_hackathon,
+            #     trigger=IntervalTrigger(minutes=1),
+            #     id='check_hackathon_start_time',
+            #     name='Check hackathon start time and switch stage',
+            #     next_run_time=next_minute,
+            #     replace_existing=True
+            # )
 
         logging.info(f"Целевая дата еще не достигнута. Следующая проверка в {next_minute}")
 
 
 scheduler = AsyncIOScheduler()
 
-scheduler.add_job(
-    check_time_and_close_registration,
-    trigger=IntervalTrigger(minutes=1),
-    id='check_registration_time',
-    name='Check registration time and close if needed',
-    replace_existing=True
-)
+# scheduler.add_job(
+#     check_time_and_close_registration,
+#     trigger=IntervalTrigger(minutes=1),
+#     id='check_registration_time',
+#     name='Check registration time and close if needed',
+#     replace_existing=True
+# )
 
 logging.info(f"Scheduled registration close check job. Целевая дата: {target_date}")
 
@@ -2229,32 +2229,32 @@ async def check_time_and_start_solution_review():
 initial_check_date = datetime.now(tz)
 next_minute = initial_check_date.replace(second=0, microsecond=0) + timedelta(minutes=1)
 
-scheduler.add_job(
-    check_time_and_start_hackathon,
-    trigger=IntervalTrigger(minutes=1),
-    id='check_hackathon_start_time',
-    name='Check hackathon start time and switch stage',
-    next_run_time=next_minute,
-    replace_existing=True
-)
-
-scheduler.add_job(
-    check_time_and_start_solution_submission,
-    trigger=IntervalTrigger(minutes=1),
-    id='check_solution_submission_time',
-    name='Check solution submission time and switch stage',
-    next_run_time=next_minute,
-    replace_existing=True
-)
-
-scheduler.add_job(
-    check_time_and_start_solution_review,
-    trigger=IntervalTrigger(minutes=1),
-    id='check_solution_review_time',
-    name='Check solution review time and switch stage',
-    next_run_time=next_minute,
-    replace_existing=True
-)
+# scheduler.add_job(
+#     check_time_and_start_hackathon,
+#     trigger=IntervalTrigger(minutes=1),
+#     id='check_hackathon_start_time',
+#     name='Check hackathon start time and switch stage',
+#     next_run_time=next_minute,
+#     replace_existing=True
+# )
+#
+# scheduler.add_job(
+#     check_time_and_start_solution_submission,
+#     trigger=IntervalTrigger(minutes=1),
+#     id='check_solution_submission_time',
+#     name='Check solution submission time and switch stage',
+#     next_run_time=next_minute,
+#     replace_existing=True
+# )
+#
+# scheduler.add_job(
+#     check_time_and_start_solution_review,
+#     trigger=IntervalTrigger(minutes=1),
+#     id='check_solution_review_time',
+#     name='Check solution review time and switch stage',
+#     next_run_time=next_minute,
+#     replace_existing=True
+# )
 
 logging.info(
     f"Scheduled hackathon start check job. Целевая дата: {hackathon_start_date}, первая проверка в {next_minute}")
