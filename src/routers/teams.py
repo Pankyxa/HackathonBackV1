@@ -32,7 +32,7 @@ from fastapi import BackgroundTasks
 from src.utils.background_tasks import send_team_invitation_email, \
     send_hackathon_consultation_notification, send_team_confirmation_email, send_judge_briefing_notification, \
     send_single_judge_briefing_notification, send_task_update_notification, send_hackathon_opening_notification, \
-    send_judge_opening_notification, send_defense_schedule_notification
+    send_judge_opening_notification, send_defense_schedule_notification, send_closing_ceremony_notification
 from src.utils.email_utils import email_sender
 from src.utils.file_utils import save_file
 from src.utils.router_states import team_router_state, user_router_state, stage_router_state
@@ -1928,4 +1928,30 @@ async def send_defense_schedule_notification_route(
 
     return {
         "message": "Запущена рассылка уведомлений о защите проектов всем активным командам"
+    }
+
+@router.post("/notify/closing-ceremony", response_model=dict)
+async def notify_closing_ceremony(
+        background_tasks: BackgroundTasks,
+        current_user: User = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session)
+):
+    """Отправить уведомление о торжественном закрытии хакатона всем активным командам"""
+    user_roles_query = select(User2Roles).where(User2Roles.user_id == current_user.id)
+    user_roles = await session.execute(user_roles_query)
+    user_roles = user_roles.scalars().all()
+
+    is_admin = any(role.role_id == user_router_state.admin_role_id for role in user_roles)
+    is_organizer = any(role.role_id == user_router_state.organizer_role_id for role in user_roles)
+
+    if not (is_admin or is_organizer):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Доступ разрешен только для администраторов и организаторов"
+        )
+
+    background_tasks.add_task(send_closing_ceremony_notification, session)
+
+    return {
+        "message": "Запущена рассылка уведомлений о торжественном закрытии хакатона"
     }
