@@ -219,6 +219,7 @@ async def get_evaluation_results(
     query = select(
         Team.id.label('team_id'),
         Team.team_name.label('team_name'),
+        Team.team_motto.label('team_motto'),
         func.avg(
             TeamEvaluation.criterion_1 +
             TeamEvaluation.criterion_2 +
@@ -475,3 +476,50 @@ async def get_detailed_evaluations(
     detailed_evaluations.sort(key=lambda x: x["total_score"], reverse=True)
 
     return detailed_evaluations
+
+@router.get("/public-results", response_model=List[TeamTotalScore])
+async def get_public_evaluation_results(
+        session: AsyncSession = Depends(get_session)
+):
+    """Публичное получение итоговых результатов всех команд без авторизации"""
+    latest_evaluations = (
+        select(TeamEvaluation.id)
+        .distinct(TeamEvaluation.judge_id, TeamEvaluation.team_id)
+        .order_by(
+            TeamEvaluation.judge_id,
+            TeamEvaluation.team_id,
+            TeamEvaluation.created_at.desc()
+        )
+    ).scalar_subquery()
+
+    query = select(
+        Team.id.label('team_id'),
+        Team.team_name.label('team_name'),
+        Team.team_motto.label('team_motto'),
+        func.avg(
+            TeamEvaluation.criterion_1 +
+            TeamEvaluation.criterion_2 +
+            TeamEvaluation.criterion_3 +
+            TeamEvaluation.criterion_4 +
+            TeamEvaluation.criterion_5
+        ).label('average_score'),
+        func.count(TeamEvaluation.judge_id.distinct()).label('evaluations_count'),
+        func.sum(
+            TeamEvaluation.criterion_1 +
+            TeamEvaluation.criterion_2 +
+            TeamEvaluation.criterion_3 +
+            TeamEvaluation.criterion_4 +
+            TeamEvaluation.criterion_5
+        ).label('total_score')
+    ).join(
+        TeamEvaluation,
+        Team.id == TeamEvaluation.team_id
+    ).where(
+        TeamEvaluation.id.in_(latest_evaluations)
+    ).group_by(
+        Team.id,
+        Team.team_name
+    )
+
+    result = await session.execute(query)
+    return result.all()

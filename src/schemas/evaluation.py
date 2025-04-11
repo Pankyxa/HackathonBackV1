@@ -36,6 +36,7 @@ class TeamTotalScore(BaseModel):
     """Схема для отображения итоговых результатов команды"""
     team_id: UUID
     team_name: str
+    team_motto: str
     average_score: float
     evaluations_count: int
     total_score: float
