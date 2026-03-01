@@ -10,7 +10,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status, File, UploadFile, Form, Query
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, exists, func, and_
+from sqlalchemy import select, exists, func, and_, update
 from typing import List, Optional
 import json
 from uuid import UUID
@@ -20,6 +20,8 @@ from sqlalchemy.orm import joinedload, selectinload
 
 from src.db import get_session
 from src.models import User, Team, TeamMember, Role, UserStatusHistory, Stage
+from src.models.event import Event
+from src.models.evaluation import TeamEvaluation
 from src.models.file import File as DBFile
 from src.models.enums import TeamMemberStatus, TeamRole, FileType, FileOwnerType, StageType
 from src.models.user import User2Roles
@@ -30,14 +32,15 @@ from src.auth.jwt import get_current_user
 from src.settings import settings
 from fastapi import BackgroundTasks
 from src.utils.background_tasks import send_team_invitation_email, \
-    send_hackathon_consultation_notification, send_team_confirmation_email, send_judge_briefing_notification, \
+    send_hackathon_consultation_notification, send_team_confirmation_email_background, send_judge_briefing_notification, \
     send_single_judge_briefing_notification, send_task_update_notification, send_hackathon_opening_notification, \
     send_judge_opening_notification, send_defense_schedule_notification, send_closing_ceremony_notification
 from src.utils.email_utils import email_sender
 from src.utils.file_utils import save_file
-from src.utils.router_states import team_router_state, user_router_state, stage_router_state
+from src.utils.router_states import team_router_state, user_router_state, stage_router_state, file_router_state
 from src.utils.stage_checker import check_stage
-from src.utils.router_states import team_router_state, user_router_state, file_router_state
+from src.utils.event_utils import get_active_event
+from src.utils.user_status_utils import update_team_members_statuses_for_event
 
 router = APIRouter(prefix="/teams", tags=["teams"])
 
@@ -69,6 +72,7 @@ async def create_team(
         session: AsyncSession = Depends(get_session)
 ):
     await check_stage(session, StageType.REGISTRATION)
+    active_event = await get_active_event(session)
 
     """Создание команды с указанием участников по их ID"""
     try:
@@ -90,21 +94,33 @@ async def create_team(
                 detail="Некоторые пользователи не найдены"
             )
 
-    existing_teamlead_query = select(TeamMember).where(
+    # Проверяем, не является ли пользователь тимлидом в активном событии
+    existing_teamlead_query = (
+        select(TeamMember)
+        .join(Team, TeamMember.team_id == Team.id)
+        .where(
         TeamMember.user_id == current_user.id,
         TeamMember.role_id == team_router_state.teamlead_role_id,
-        TeamMember.status_id == team_router_state.accepted_status_id
+            TeamMember.status_id == team_router_state.accepted_status_id,
+            Team.event_id == active_event.id
+        )
     )
     existing_teamlead = await session.execute(existing_teamlead_query)
     if existing_teamlead.scalar_one_or_none():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Пользователь уже является тимлидом другой команды"
+            detail="Пользователь уже является тимлидом другой команды в текущем событии"
         )
 
-    pending_invitations_query = select(TeamMember).where(
+    # Отклоняем pending приглашения в активном событии
+    pending_invitations_query = (
+        select(TeamMember)
+        .join(Team, TeamMember.team_id == Team.id)
+        .where(
         TeamMember.user_id == current_user.id,
-        TeamMember.status_id == team_router_state.pending_status_id
+            TeamMember.status_id == team_router_state.pending_status_id,
+            Team.event_id == active_event.id
+        )
     )
     pending_invitations = await session.execute(pending_invitations_query)
     for invitation in pending_invitations.scalars():
@@ -116,7 +132,8 @@ async def create_team(
         team_name=team_name,
         team_motto=team_motto,
         team_leader_id=current_user.id,
-        logo_file_id=None
+        logo_file_id=None,
+        event_id=active_event.id
     )
     session.add(team)
     await session.flush()
@@ -217,6 +234,7 @@ async def invite_team_mentor(
 ):
     """Пригласить ментора в команду"""
     await check_stage(session, StageType.REGISTRATION)
+    active_event = await get_active_event(session)
 
     team_query = (
         select(Team)
@@ -229,7 +247,10 @@ async def invite_team_mentor(
             selectinload(Team.members)
             .selectinload(TeamMember.status)
         )
-        .where(Team.id == team_id)
+        .where(
+            Team.id == team_id,
+            Team.event_id == active_event.id
+        )
     )
     team = await session.execute(team_query)
     team = team.scalar_one_or_none()
@@ -237,7 +258,7 @@ async def invite_team_mentor(
     if not team:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Команда не найдена"
+            detail="Команда не найдена или не принадлежит активному событию"
         )
 
     if team.team_leader_id != current_user.id:
@@ -336,6 +357,9 @@ async def invite_team_member(
 ):
     """Пригласить пользователя в команду"""
     await check_stage(session, StageType.REGISTRATION)
+    
+    # Получаем активное событие для проверки
+    active_event = await get_active_event(session)
 
     team_query = (
         select(Team)
@@ -356,6 +380,13 @@ async def invite_team_member(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Команда не найдена"
+        )
+    
+    # Проверяем, что команда принадлежит активному событию
+    if team.event_id != active_event.id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Команда не принадлежит активному событию"
         )
 
     if team.team_leader_id != current_user.id:
@@ -428,8 +459,9 @@ async def get_pending_invitations(
         current_user: User = Depends(get_current_user),
         session: AsyncSession = Depends(get_session)
 ):
-    """Получить список pending приглашений в команды"""
+    """Получить список pending приглашений в команды в активном событии"""
     await check_stage(session, StageType.REGISTRATION)
+    active_event = await get_active_event(session)
 
     query = (
         select(Team, TeamMember)
@@ -444,25 +476,31 @@ async def get_pending_invitations(
             .selectinload(TeamMember.status)
         )
         .where(
+            Team.event_id == active_event.id,
             TeamMember.user_id == current_user.id,
             TeamMember.status_id == team_router_state.pending_status_id
         )
     )
     result = await session.execute(query)
-    invitations = [
-        TeamInvitationResponse(
-            team=TeamResponse(
-                id=team.id,
-                team_name=team.team_name,
-                team_motto=team.team_motto,
-                team_leader_id=team.team_leader_id,
-                logo_file_id=team.logo_file_id,
-                status_details=TeamStatusDetails(**team.get_status_details())
-            ),
-            member=member
+    # Итерируем напрямую по результату - он возвращает кортежи (Team, TeamMember)
+    invitations = []
+    for row in result:
+        team, member = row
+        # Обновляем статусы пользователей на статусы для активного события
+        await update_team_members_statuses_for_event(session, team, active_event.id)
+        invitations.append(
+            TeamInvitationResponse(
+                team=TeamResponse(
+                    id=team.id,
+                    team_name=team.team_name,
+                    team_motto=team.team_motto,
+                    team_leader_id=team.team_leader_id,
+                    logo_file_id=team.logo_file_id,
+                    status_details=TeamStatusDetails(**team.get_status_details())
+                ),
+                member=member
+            )
         )
-        for team, member in result
-    ]
     return invitations
 
 
@@ -547,6 +585,7 @@ async def accept_invitation(
     await session.flush()
     await session.refresh(invitation)
 
+    active_event = await get_active_event(session)
     teams_query = (
         select(Team)
         .options(
@@ -560,32 +599,48 @@ async def accept_invitation(
             selectinload(Team.members)
             .selectinload(TeamMember.status)
         )
+        .where(Team.event_id == active_event.id)
     )
     result = await session.execute(teams_query)
     teams = result.scalars().all()
+
+    # Обновляем статусы пользователей для всех команд перед проверкой
+    for team in teams:
+        await update_team_members_statuses_for_event(session, team, active_event.id)
 
     active_teams = [team for team in teams if team.get_status() == "active"]
     active_teams_count = len(active_teams)
 
     if active_teams_count >= 20:
-        current_stage_query = select(Stage).where(Stage.is_active == True)
+        current_stage_query = (
+            select(Stage)
+            .where(Stage.is_active == True, Stage.event_id == active_event.id)
+        )
         current_stage = await session.execute(current_stage_query)
         current_stage = current_stage.scalar_one_or_none()
 
         if current_stage and current_stage.type == StageType.REGISTRATION.value:
             registration_closed_stage_query = (
                 select(Stage)
-                .where(Stage.type == StageType.REGISTRATION_CLOSED.value)
+                .where(
+                    Stage.type == StageType.REGISTRATION_CLOSED.value,
+                    Stage.event_id == active_event.id,
+                    Stage.is_active == False
+                )
             )
             registration_closed_stage = await session.execute(registration_closed_stage_query)
             registration_closed_stage = registration_closed_stage.scalar_one_or_none()
 
             if registration_closed_stage:
-                current_stage.is_active = False
-                registration_closed_stage.is_active = True
-                await stage_router_state.initialize(session)
-
-                background_tasks.add_task(send_team_confirmation_email, session)
+                from src.utils.background_tasks import activate_stage_automatically_background
+                # Используем обертку для фоновой активации этапа, чтобы не блокировать ответ
+                background_tasks.add_task(
+                    activate_stage_automatically_background,
+                    registration_closed_stage.id,
+                    "при достижении лимита команд (20)"
+                )
+                # Используем обертку, которая создает свою сессию, и запускаем только один раз
+                background_tasks.add_task(send_team_confirmation_email_background)
 
     await session.commit()
     return {"message": "Приглашение принято"}
@@ -624,7 +679,8 @@ async def get_teams(
         current_user: User = Depends(get_current_user),
         session: AsyncSession = Depends(get_session)
 ):
-    """Получить список команд пользователя"""
+    """Получить список команд пользователя в активном событии"""
+    active_event = await get_active_event(session)
     query = (
         select(Team)
         .options(
@@ -637,6 +693,7 @@ async def get_teams(
             .selectinload(TeamMember.status)
         )
         .where(
+            Team.event_id == active_event.id,
             exists(
                 select(1).where(
                     TeamMember.team_id == Team.id,
@@ -647,6 +704,11 @@ async def get_teams(
     )
     result = await session.execute(query)
     teams = result.scalars().all()
+    
+    # Обновляем статусы пользователей для всех команд
+    for team in teams:
+        await update_team_members_statuses_for_event(session, team, active_event.id)
+    
     return [
         TeamResponse(
             id=team.id,
@@ -667,9 +729,23 @@ async def get_team(
         session: AsyncSession = Depends(get_session)
 ):
     """Получить информацию о команде по ID"""
+    active_event = await get_active_event(session)
+    
     team_query = (
         select(Team)
-        .where(Team.id == team_id)
+        .options(
+            selectinload(Team.members)
+            .selectinload(TeamMember.user)
+            .selectinload(User.current_status),
+            selectinload(Team.members)
+            .selectinload(TeamMember.role),
+            selectinload(Team.members)
+            .selectinload(TeamMember.status)
+        )
+        .where(
+            Team.id == team_id,
+            Team.event_id == active_event.id
+        )
     )
     team = await session.execute(team_query)
     team = team.scalar_one_or_none()
@@ -677,7 +753,7 @@ async def get_team(
     if not team:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Команда не найдена"
+            detail="Команда не найдена или не принадлежит активному событию"
         )
 
     member_query = select(TeamMember).where(
@@ -691,6 +767,9 @@ async def get_team(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="У вас нет доступа к информации об этой команде"
         )
+
+    # Обновляем статусы пользователей на статусы для активного события
+    await update_team_members_statuses_for_event(session, team, active_event.id)
 
     return TeamResponse(
         id=team.id,
@@ -709,11 +788,15 @@ async def get_my_team(
         session: AsyncSession = Depends(get_session)
 ):
     """Получить информацию о своей команде"""
+    active_event = await get_active_event(session)
+    
     member_query = (
         select(TeamMember)
+        .join(Team, TeamMember.team_id == Team.id)
         .where(
             TeamMember.user_id == current_user.id,
-            TeamMember.status_id == team_router_state.accepted_status_id
+            TeamMember.status_id == team_router_state.accepted_status_id,
+            Team.event_id == active_event.id
         )
     )
     my_membership = await session.execute(member_query)
@@ -722,7 +805,7 @@ async def get_my_team(
     if not my_membership:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Вы не состоите в команде"
+            detail="Вы не состоите в команде активного события"
         )
 
     team_query = (
@@ -736,7 +819,10 @@ async def get_my_team(
             selectinload(Team.members)
             .selectinload(TeamMember.status)
         )
-        .where(Team.id == my_membership.team_id)
+        .where(
+            Team.id == my_membership.team_id,
+            Team.event_id == active_event.id
+        )
     )
     team = await session.execute(team_query)
     team = team.scalar_one_or_none()
@@ -744,8 +830,11 @@ async def get_my_team(
     if not team:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Команда не найдена"
+            detail="Команда не найдена или не принадлежит активному событию"
         )
+
+    # Обновляем статусы пользователей на статусы для активного события
+    await update_team_members_statuses_for_event(session, team, active_event.id)
 
     return TeamResponse(
         id=team.id,
@@ -806,6 +895,13 @@ async def get_mentor_teams(
 
     result = await session.execute(teams_query)
     teams = result.scalars().all()
+    
+    # Получаем активное событие для обновления статусов
+    active_event = await get_active_event(session)
+    
+    # Обновляем статусы пользователей для всех команд
+    for team in teams:
+        await update_team_members_statuses_for_event(session, team, active_event.id)
 
     return [
         TeamResponse(
@@ -826,13 +922,31 @@ async def get_admin_teams(
         limit: int = Query(default=10, le=50, description="Number of results to return"),
         offset: int = Query(default=0, description="Number of results to skip"),
         search: Optional[str] = Query(None, min_length=2, description="Optional search query for team name"),
+        event_id: Optional[uuid.UUID] = Query(
+            default=None,
+            description="Идентификатор события. Если не указан — используется активное событие.",
+        ),
         current_user: User = Depends(get_current_user),
         session: AsyncSession = Depends(get_session)
 ):
     """
-    Получение списка всех команд с пагинацией и поиском.
+    Получение списка всех команд активного события с пагинацией и поиском.
     Доступно только для администраторов и организаторов.
     """
+    # Определяем событие: либо указанное явно, либо текущее активное
+    if event_id:
+        event_query = select(Event).where(Event.id == event_id)
+        event_result = await session.execute(event_query)
+        event = event_result.scalar_one_or_none()
+        if not event:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Событие не найдено"
+            )
+        current_event_id = event.id
+    else:
+        active_event = await get_active_event(session)
+        current_event_id = active_event.id
     current_user_query = (
         select(User)
         .options(selectinload(User.user2roles))
@@ -867,6 +981,7 @@ async def get_admin_teams(
             selectinload(Team.members)
             .selectinload(TeamMember.status)
         )
+        .where(Team.event_id == current_event_id)
     )
 
     if search:
@@ -885,6 +1000,17 @@ async def get_admin_teams(
 
     result = await session.execute(query)
     teams = result.scalars().all()
+    
+    # Получаем активное событие для обновления статусов
+    if event_id:
+        event_for_status = event_id
+    else:
+        active_event = await get_active_event(session)
+        event_for_status = active_event.id
+    
+    # Обновляем статусы пользователей для всех команд
+    for team in teams:
+        await update_team_members_statuses_for_event(session, team, event_for_status)
 
     return {
         "teams": [
@@ -965,6 +1091,8 @@ async def get_mentor_team(
                 detail="У вас нет доступа к информации об этой команде"
             )
 
+    active_event = await get_active_event(session)
+    
     team_query = (
         select(Team)
         .options(
@@ -976,7 +1104,10 @@ async def get_mentor_team(
             selectinload(Team.members)
             .selectinload(TeamMember.status)
         )
-        .where(Team.id == team_id)
+        .where(
+            Team.id == team_id,
+            Team.event_id == active_event.id
+        )
     )
 
     result = await session.execute(team_query)
@@ -985,8 +1116,11 @@ async def get_mentor_team(
     if not team:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Команда не найдена"
+            detail="Команда не найдена или не принадлежит активному событию"
         )
+
+    # Обновляем статусы пользователей на статусы для активного события
+    await update_team_members_statuses_for_event(session, team, active_event.id)
 
     return TeamResponse(
         id=team.id,
@@ -1005,14 +1139,19 @@ async def get_team_logo(
         session: AsyncSession = Depends(get_session)
 ):
     """Получить логотип команды"""
-    query = select(Team).where(Team.id == team_id)
+    active_event = await get_active_event(session)
+    
+    query = select(Team).where(
+        Team.id == team_id,
+        Team.event_id == active_event.id
+    )
     team = await session.execute(query)
     team = team.scalar_one_or_none()
 
     if not team:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Команда не найдена"
+            detail="Команда не найдена или не принадлежит активному событию"
         )
 
     if not team.logo_file_id:
@@ -1048,14 +1187,19 @@ async def remove_team_member(
     """Удалить участника из команды"""
     await check_stage(session, StageType.REGISTRATION)
 
-    team_query = select(Team).where(Team.id == team_id)
+    active_event = await get_active_event(session)
+    
+    team_query = select(Team).where(
+        Team.id == team_id,
+        Team.event_id == active_event.id
+    )
     team = await session.execute(team_query)
     team = team.scalar_one_or_none()
 
     if not team:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Команда не найдена"
+            detail="Команда не найдена или не принадлежит активному событию"
         )
 
     if team.team_leader_id != current_user.id:
@@ -1100,14 +1244,19 @@ async def update_team_logo(
     """Обновить логотип команды"""
     await check_stage(session, StageType.REGISTRATION)
 
-    team_query = select(Team).where(Team.id == team_id)
+    active_event = await get_active_event(session)
+    
+    team_query = select(Team).where(
+        Team.id == team_id,
+        Team.event_id == active_event.id
+    )
     team = await session.execute(team_query)
     team = team.scalar_one_or_none()
 
     if not team:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Команда не найдена"
+            detail="Команда не найдена или не принадлежит активному событию"
         )
 
     if team.team_leader_id != current_user.id:
@@ -1155,14 +1304,19 @@ async def update_team_info(
     """Обновить название и девиз команды"""
     await check_stage(session, StageType.REGISTRATION)
 
-    team_query = select(Team).where(Team.id == team_id)
+    active_event = await get_active_event(session)
+    
+    team_query = select(Team).where(
+        Team.id == team_id,
+        Team.event_id == active_event.id
+    )
     team = await session.execute(team_query)
     team = team.scalar_one_or_none()
 
     if not team:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Команда не найдена"
+            detail="Команда не найдена или не принадлежит активному событию"
         )
 
     if team.team_leader_id != current_user.id:
@@ -1186,9 +1340,14 @@ async def get_team_members(
         session: AsyncSession = Depends(get_session)
 ):
     """Получить список всех участников команды"""
+    active_event = await get_active_event(session)
+    
     team_query = (
         select(Team)
-        .where(Team.id == team_id)
+        .where(
+            Team.id == team_id,
+            Team.event_id == active_event.id
+        )
     )
     team = await session.execute(team_query)
     team = team.scalar_one_or_none()
@@ -1196,7 +1355,7 @@ async def get_team_members(
     if not team:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Команда не найдена"
+            detail="Команда не найдена или не принадлежит активному событию"
         )
 
     member_query = select(TeamMember).where(
@@ -1275,17 +1434,22 @@ async def delete_team(
         current_user: User = Depends(get_current_user),
         session: AsyncSession = Depends(get_session)
 ):
-    """Удалить команду (только для лидера команды)"""
+    """Удалить команду (только для лидера команды, только на этапе Регистрация)"""
     await check_stage(session, StageType.REGISTRATION)
 
-    team_query = select(Team).where(Team.id == team_id)
+    active_event = await get_active_event(session)
+    
+    team_query = select(Team).where(
+        Team.id == team_id,
+        Team.event_id == active_event.id
+    )
     team = await session.execute(team_query)
     team = team.scalar_one_or_none()
 
     if not team:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Команда не найдена"
+            detail="Команда не найдена или не принадлежит активному событию"
         )
 
     if team.team_leader_id != current_user.id:
@@ -1325,26 +1489,40 @@ async def delete_team(
 
 @router.post("/leave")
 async def leave_team(
+        team_id: UUID = Query(..., description="ID команды, из которой нужно выйти"),
         current_user: User = Depends(get_current_user),
         session: AsyncSession = Depends(get_session)
 ):
     """Выйти из команды (недоступно для лидера команды)"""
     await check_stage(session, StageType.REGISTRATION)
+    
+    # Получаем активное событие для фильтрации
+    active_event = await get_active_event(session)
 
-    member_query = select(TeamMember).where(
-        TeamMember.user_id == current_user.id,
-        TeamMember.status_id == team_router_state.accepted_status_id
+    member_query = (
+        select(TeamMember)
+        .join(Team, TeamMember.team_id == Team.id)
+        .options(
+            selectinload(TeamMember.role)
+        )
+        .where(
+            TeamMember.user_id == current_user.id,
+            TeamMember.team_id == team_id,
+            TeamMember.status_id == team_router_state.accepted_status_id,
+            Team.event_id == active_event.id
+        )
     )
-    member = await session.execute(member_query)
-    member = member.scalar_one_or_none()
-
+    result = await session.execute(member_query)
+    member = result.scalar_one_or_none()
+    
     if not member:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Вы не состоите в команде"
+            detail="Вы не состоите в указанной команде"
         )
 
-    if member.role == TeamRole.TEAMLEAD:
+    # Проверяем роль через role_id, так как это более надежно
+    if member.role_id == team_router_state.teamlead_role_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Лидер команды не может выйти из команды. Передайте права лидера другому участнику или удалите команду"
@@ -1356,68 +1534,172 @@ async def leave_team(
     return {"message": "Вы успешно вышли из команды"}
 
 
-from src.utils.solution_utils import save_team_solution
-
-
-@router.post("/{team_id}/solution")
-async def upload_team_solution(
+@router.post("/{team_id}/set-finalist", response_model=dict)
+async def set_team_as_finalist(
         team_id: uuid.UUID,
-        solution_file: UploadFile = File(...),
+    is_finalist: bool = True,
         current_user: User = Depends(get_current_user),
         session: AsyncSession = Depends(get_session)
 ):
-    """Загрузка ZIP файла с решением команды"""
-    await check_stage(session, [StageType.TASK_DISTRIBUTION, StageType.SOLUTION_SUBMISSION])
-
-    team_query = select(Team).where(Team.id == team_id)
-    team = await session.execute(team_query)
-    team = team.scalar_one_or_none()
+    """Отметить команду как финалиста (только для администраторов и организаторов)"""
+    # Проверка прав
+    user_roles_query = select(User2Roles).where(User2Roles.user_id == current_user.id)
+    user_roles = await session.execute(user_roles_query)
+    user_roles = user_roles.scalars().all()
+    
+    is_admin = any(role.role_id == user_router_state.admin_role_id for role in user_roles)
+    is_organizer = any(role.role_id == user_router_state.organizer_role_id for role in user_roles)
+    
+    if not (is_admin or is_organizer):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Доступ разрешен только для администраторов и организаторов"
+        )
+    
+    # Получаем активное событие
+    active_event = await get_active_event(session)
+    
+    # Получаем команду с проверкой event_id
+    team_query = select(Team).where(
+        Team.id == team_id,
+        Team.event_id == active_event.id
+    )
+    team_result = await session.execute(team_query)
+    team = team_result.scalar_one_or_none()
 
     if not team:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Команда не найдена"
+            detail="Команда не найдена или не принадлежит активному событию"
         )
 
-    member_query = select(TeamMember).where(
-        TeamMember.team_id == team_id,
-        TeamMember.user_id == current_user.id,
-        TeamMember.status_id == team_router_state.accepted_status_id
-    )
-    member = await session.execute(member_query)
-    member = member.scalar_one_or_none()
+    # Обновляем статус финалиста
+    team.is_finalist = is_finalist
+    await session.commit()
+    await session.refresh(team)
+    
+    return {
+        "message": f"Команда {'отмечена как финалист' if is_finalist else 'убрана из финалистов'}",
+        "team_id": str(team.id),
+        "team_name": team.team_name,
+        "is_finalist": team.is_finalist
+    }
 
-    if not member:
+
+@router.post("/set-finalists-bulk", response_model=dict)
+async def set_finalists_bulk(
+    team_ids: List[uuid.UUID],
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session)
+):
+    """Массово отметить команды как финалистов на основе топ результатов (только для администраторов и организаторов)"""
+    # Проверка прав
+    user_roles_query = select(User2Roles).where(User2Roles.user_id == current_user.id)
+    user_roles = await session.execute(user_roles_query)
+    user_roles = user_roles.scalars().all()
+    
+    is_admin = any(role.role_id == user_router_state.admin_role_id for role in user_roles)
+    is_organizer = any(role.role_id == user_router_state.organizer_role_id for role in user_roles)
+
+    if not (is_admin or is_organizer):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Вы не являетесь участником этой команды"
+            detail="Доступ разрешен только для администраторов и организаторов"
         )
 
-    existing_solution_query = select(DBFile).where(
-        DBFile.team_id == team_id,
-        DBFile.file_type_id == file_router_state.solution_type_id
+    active_event = await get_active_event(session)
+    
+    # Сбрасываем всех финалистов текущего события
+    await session.execute(
+        update(Team)
+        .where(Team.event_id == active_event.id)
+        .values(is_finalist=False)
     )
-    existing_solution = await session.execute(existing_solution_query)
-    existing_solution = existing_solution.scalar_one_or_none()
-
-    if existing_solution:
-        if os.path.exists(existing_solution.file_path):
-            os.remove(existing_solution.file_path)
-        await session.delete(existing_solution)
-        await session.flush()
-
-    solution_file_model = await save_team_solution(
-        upload_file=solution_file,
-        team_id=team_id,
-        session=session,
-        max_file_size=500 * 1024 * 1024  # 500MB
-    )
-
-    session.add(solution_file_model)
+    
+    # Отмечаем указанные команды как финалисты
+    updated_count = 0
+    for team_id in team_ids:
+        team_query = select(Team).where(
+            Team.id == team_id,
+            Team.event_id == active_event.id
+        )
+        team_result = await session.execute(team_query)
+        team = team_result.scalar_one_or_none()
+        
+        if team:
+            team.is_finalist = True
+            updated_count += 1
+    
     await session.commit()
-    await session.refresh(solution_file_model)
+    
+    return {
+        "message": f"Отмечено {updated_count} команд как финалисты",
+        "finalists_count": updated_count
+    }
 
-    return solution_file_model
+
+# ЗАКОММЕНТИРОВАНО: Загрузка файлов решений отключена, решения теперь через GitHub
+# from src.utils.solution_utils import save_team_solution
+
+# @router.post("/{team_id}/solution")
+# async def upload_team_solution(
+#         team_id: uuid.UUID,
+#         solution_file: UploadFile = File(...),
+#         current_user: User = Depends(get_current_user),
+#         session: AsyncSession = Depends(get_session)
+# ):
+#     """Загрузка ZIP файла с решением команды"""
+#     await check_stage(session, [StageType.TASK_DISTRIBUTION, StageType.SOLUTION_SUBMISSION])
+#
+#     team_query = select(Team).where(Team.id == team_id)
+#     team = await session.execute(team_query)
+#     team = team.scalar_one_or_none()
+#
+#     if not team:
+#         raise HTTPException(
+#             status_code=status.HTTP_404_NOT_FOUND,
+#             detail="Команда не найдена"
+#         )
+#
+#     member_query = select(TeamMember).where(
+#         TeamMember.team_id == team_id,
+#         TeamMember.user_id == current_user.id,
+#         TeamMember.status_id == team_router_state.accepted_status_id
+#     )
+#     member = await session.execute(member_query)
+#     member = member.scalar_one_or_none()
+#
+#     if not member:
+#         raise HTTPException(
+#             status_code=status.HTTP_403_FORBIDDEN,
+#             detail="Вы не являетесь участником этой команды"
+#         )
+#
+#     existing_solution_query = select(DBFile).where(
+#         DBFile.team_id == team_id,
+#         DBFile.file_type_id == file_router_state.solution_type_id
+#     )
+#     existing_solution = await session.execute(existing_solution_query)
+#     existing_solution = existing_solution.scalar_one_or_none()
+#
+#     if existing_solution:
+#         if os.path.exists(existing_solution.file_path):
+#             os.remove(existing_solution.file_path)
+#         await session.delete(existing_solution)
+#         await session.flush()
+#
+#     solution_file_model = await save_team_solution(
+#         upload_file=solution_file,
+#         team_id=team_id,
+#         session=session,
+#         max_file_size=500 * 1024 * 1024  # 500MB
+#     )
+#
+#     session.add(solution_file_model)
+#     await session.commit()
+#     await session.refresh(solution_file_model)
+#
+#     return solution_file_model
 
 
 @router.post("/{team_id}/deployment")
@@ -1428,16 +1710,41 @@ async def upload_team_deployment(
         session: AsyncSession = Depends(get_session)
 ):
     """Загрузка файла с описанием развертывания (TXT или MD)"""
-    await check_stage(session, [StageType.TASK_DISTRIBUTION, StageType.SOLUTION_SUBMISSION])
+    # Проверяем этап - разрешены заочный и очный этапы
+    current_stage = await check_stage(session, [
+        StageType.TASK_DISTRIBUTION,  # Старый тип (для совместимости)
+        StageType.SOLUTION_SUBMISSION,  # Старый тип (для совместимости)
+        StageType.REMOTE_TASK_DISTRIBUTION,  # Заочный этап - распределение заданий
+        StageType.REMOTE_SOLUTION_SUBMISSION,  # Заочный этап - прием решений
+        StageType.ON_SITE_TASK_DISTRIBUTION,  # Очный этап - распределение заданий
+        StageType.ON_SITE_SOLUTION_SUBMISSION  # Очный этап - прием решений
+    ])
 
-    team_query = select(Team).where(Team.id == team_id)
+    active_event = await get_active_event(session)
+    
+    team_query = select(Team).where(
+        Team.id == team_id,
+        Team.event_id == active_event.id
+    )
     team = await session.execute(team_query)
     team = team.scalar_one_or_none()
 
     if not team:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Команда не найдена"
+            detail="Команда не найдена или не принадлежит активному событию"
+        )
+    
+    # Проверяем, является ли это очным этапом (по типу или группе)
+    from src.utils.stage_group_utils import is_on_site_stage
+    
+    is_on_site = is_on_site_stage(current_stage)
+    
+    # Если очный этап, проверяем, что команда является финалистом
+    if is_on_site and not team.is_finalist:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Только команды-финалисты могут загружать файлы на очном этапе"
         )
 
     member_query = select(TeamMember).where(
@@ -1488,132 +1795,133 @@ async def upload_team_deployment(
     return deployment_file_model
 
 
-@router.get("/{team_id}/solution")
-async def get_team_solution(
-        team_id: uuid.UUID,
-        range: Optional[str] = Header(None),
-        if_none_match: Optional[str] = Header(None),
-        if_modified_since: Optional[str] = Header(None),
-        current_user: User = Depends(get_current_user),
-        session: AsyncSession = Depends(get_session)
-):
-    """Получить файл решения команды"""
-    team_query = select(Team).where(Team.id == team_id)
-    team = await session.execute(team_query)
-    team = team.scalar_one_or_none()
-
-    if not team:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Команда не найдена"
-        )
-
-    member_query = select(TeamMember).where(
-        TeamMember.team_id == team_id,
-        TeamMember.user_id == current_user.id,
-        TeamMember.status_id == team_router_state.accepted_status_id
-    )
-    is_member = await session.execute(member_query)
-    is_member = is_member.scalar_one_or_none()
-
-    user_roles_query = select(User2Roles).where(User2Roles.user_id == current_user.id)
-    user_roles = await session.execute(user_roles_query)
-    user_roles = user_roles.scalars().all()
-
-    is_admin = any(role.role_id == user_router_state.admin_role_id for role in user_roles)
-    is_organizer = any(role.role_id == user_router_state.organizer_role_id for role in user_roles)
-    is_judge = any(role.role_id == user_router_state.judge_role_id for role in user_roles)
-
-    if not (is_member or is_admin or is_organizer or is_judge):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="У вас нет доступа к файлам этой команды"
-        )
-
-    solution_query = select(DBFile).where(
-        DBFile.team_id == team_id,
-        DBFile.file_type_id == file_router_state.solution_type_id
-    )
-    solution = await session.execute(solution_query)
-    solution = solution.scalar_one_or_none()
-
-    if not solution or not os.path.exists(solution.file_path):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Файл решения не найден"
-        )
-
-    file_size = os.path.getsize(solution.file_path)
-    mtime = os.path.getmtime(solution.file_path)
-    mtime_dt = datetime.fromtimestamp(mtime)
-
-    etag = hashlib.md5(f"{mtime}{file_size}".encode()).hexdigest()
-
-    if if_none_match and if_none_match == etag:
-        return Response(status_code=304)
-
-    if if_modified_since:
-        try:
-            ims_dt = datetime.strptime(if_modified_since, "%a, %d %b %Y %H:%M:%S GMT")
-            if mtime_dt <= ims_dt:
-                return Response(status_code=304)
-        except ValueError:
-            pass
-
-    start = 0
-    end = file_size - 1
-    status_code = 200
-
-    if range is not None:
-        try:
-            start_str = range.replace('bytes=', '').split('-')[0]
-            start = int(start_str)
-            if start < 0 or start >= file_size:
-                raise HTTPException(
-                    status_code=status.HTTP_416_REQUESTED_RANGE_NOT_SATISFIABLE,
-                    detail="Requested range not satisfiable"
-                )
-            status_code = 206
-        except ValueError:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid range header"
-            )
-
-    headers = {
-        'Content-Disposition': f'attachment; filename="{solution.filename}"',
-        'Content-Type': 'application/zip',
-        'Accept-Ranges': 'bytes',
-        'Cache-Control': 'public, max-age=3600',
-        'ETag': etag,
-        'Last-Modified': mtime_dt.strftime("%a, %d %b %Y %H:%M:%S GMT"),
-        'Content-Length': str(end - start + 1),
-        'X-Accel-Buffering': 'no'
-    }
-
-    if status_code == 206:
-        headers['Content-Range'] = f'bytes {start}-{end}/{file_size}'
-
-    async def file_iterator():
-        chunk_size = 256 * 1024
-        async with aiofiles.open(solution.file_path, 'rb') as f:
-            await f.seek(start)
-            bytes_remaining = end - start + 1
-            while bytes_remaining > 0:
-                chunk_size = min(chunk_size, bytes_remaining)
-                chunk = await f.read(chunk_size)
-                if not chunk:
-                    break
-                yield chunk
-                bytes_remaining -= len(chunk)
-                await asyncio.sleep(0)
-
-    return StreamingResponse(
-        file_iterator(),
-        headers=headers,
-        media_type='application/zip',
-        status_code=status_code
-    )
+# ЗАКОММЕНТИРОВАНО: Получение файлов решений отключено, решения теперь через GitHub
+# @router.get("/{team_id}/solution")
+# async def get_team_solution(
+#         team_id: uuid.UUID,
+#         range: Optional[str] = Header(None),
+#         if_none_match: Optional[str] = Header(None),
+#         if_modified_since: Optional[str] = Header(None),
+#         current_user: User = Depends(get_current_user),
+#         session: AsyncSession = Depends(get_session)
+# ):
+#     """Получить файл решения команды"""
+#     team_query = select(Team).where(Team.id == team_id)
+#     team = await session.execute(team_query)
+#     team = team.scalar_one_or_none()
+#
+#     if not team:
+#         raise HTTPException(
+#             status_code=status.HTTP_404_NOT_FOUND,
+#             detail="Команда не найдена"
+#         )
+#
+#     member_query = select(TeamMember).where(
+#         TeamMember.team_id == team_id,
+#         TeamMember.user_id == current_user.id,
+#         TeamMember.status_id == team_router_state.accepted_status_id
+#     )
+#     is_member = await session.execute(member_query)
+#     is_member = is_member.scalar_one_or_none()
+#
+#     user_roles_query = select(User2Roles).where(User2Roles.user_id == current_user.id)
+#     user_roles = await session.execute(user_roles_query)
+#     user_roles = user_roles.scalars().all()
+#
+#     is_admin = any(role.role_id == user_router_state.admin_role_id for role in user_roles)
+#     is_organizer = any(role.role_id == user_router_state.organizer_role_id for role in user_roles)
+#     is_judge = any(role.role_id == user_router_state.judge_role_id for role in user_roles)
+#
+#     if not (is_member or is_admin or is_organizer or is_judge):
+#         raise HTTPException(
+#             status_code=status.HTTP_403_FORBIDDEN,
+#             detail="У вас нет доступа к файлам этой команды"
+#         )
+#
+#     solution_query = select(DBFile).where(
+#         DBFile.team_id == team_id,
+#         DBFile.file_type_id == file_router_state.solution_type_id
+#     )
+#     solution = await session.execute(solution_query)
+#     solution = solution.scalar_one_or_none()
+#
+#     if not solution or not os.path.exists(solution.file_path):
+#         raise HTTPException(
+#             status_code=status.HTTP_404_NOT_FOUND,
+#             detail="Файл решения не найден"
+#         )
+#
+#     file_size = os.path.getsize(solution.file_path)
+#     mtime = os.path.getmtime(solution.file_path)
+#     mtime_dt = datetime.fromtimestamp(mtime)
+#
+#     etag = hashlib.md5(f"{mtime}{file_size}".encode()).hexdigest()
+#
+#     if if_none_match and if_none_match == etag:
+#         return Response(status_code=304)
+#
+#     if if_modified_since:
+#         try:
+#             ims_dt = datetime.strptime(if_modified_since, "%a, %d %b %Y %H:%M:%S GMT")
+#             if mtime_dt <= ims_dt:
+#                 return Response(status_code=304)
+#         except ValueError:
+#             pass
+#
+#     start = 0
+#     end = file_size - 1
+#     status_code = 200
+#
+#     if range is not None:
+#         try:
+#             start_str = range.replace('bytes=', '').split('-')[0]
+#             start = int(start_str)
+#             if start < 0 or start >= file_size:
+#                 raise HTTPException(
+#                     status_code=status.HTTP_416_REQUESTED_RANGE_NOT_SATISFIABLE,
+#                     detail="Requested range not satisfiable"
+#                 )
+#             status_code = 206
+#         except ValueError:
+#             raise HTTPException(
+#                 status_code=status.HTTP_400_BAD_REQUEST,
+#                 detail="Invalid range header"
+#             )
+#
+#     headers = {
+#         'Content-Disposition': f'attachment; filename="{solution.filename}"',
+#         'Content-Type': 'application/zip',
+#         'Accept-Ranges': 'bytes',
+#         'Cache-Control': 'public, max-age=3600',
+#         'ETag': etag,
+#         'Last-Modified': mtime_dt.strftime("%a, %d %b %Y %H:%M:%S GMT"),
+#         'Content-Length': str(end - start + 1),
+#         'X-Accel-Buffering': 'no'
+#     }
+#
+#     if status_code == 206:
+#         headers['Content-Range'] = f'bytes {start}-{end}/{file_size}'
+#
+#     async def file_iterator():
+#         chunk_size = 256 * 1024
+#         async with aiofiles.open(solution.file_path, 'rb') as f:
+#             await f.seek(start)
+#             bytes_remaining = end - start + 1
+#             while bytes_remaining > 0:
+#                 chunk_size = min(chunk_size, bytes_remaining)
+#                 chunk = await f.read(chunk_size)
+#                 if not chunk:
+#                     break
+#                 yield chunk
+#                 bytes_remaining -= len(chunk)
+#                 await asyncio.sleep(0)
+#
+#     return StreamingResponse(
+#         file_iterator(),
+#         headers=headers,
+#         media_type='application/zip',
+#         status_code=status_code
+#     )
 
 
 @router.get("/{team_id}/deployment")
@@ -1623,14 +1931,19 @@ async def get_team_deployment(
         session: AsyncSession = Depends(get_session)
 ):
     """Получить файл описания развертывания команды"""
-    team_query = select(Team).where(Team.id == team_id)
+    active_event = await get_active_event(session)
+    
+    team_query = select(Team).where(
+        Team.id == team_id,
+        Team.event_id == active_event.id
+    )
     team = await session.execute(team_query)
     team = team.scalar_one_or_none()
 
     if not team:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Команда не найдена"
+            detail="Команда не найдена или не принадлежит активному событию"
         )
 
     member_query = select(TeamMember).where(
@@ -1785,16 +2098,42 @@ async def update_solution_link(
         session: AsyncSession = Depends(get_session)
 ):
     """Обновить ссылку на решение команды"""
-    await check_stage(session, [StageType.TASK_DISTRIBUTION, StageType.SOLUTION_SUBMISSION])
+    # Проверяем этап - разрешены заочный и очный этапы приема решений
+    current_stage = await check_stage(session, [
+        StageType.TASK_DISTRIBUTION,  # Старый тип (для совместимости)
+        StageType.SOLUTION_SUBMISSION,  # Старый тип (для совместимости)
+        StageType.REMOTE_TASK_DISTRIBUTION,  # Заочный этап - распределение заданий
+        StageType.REMOTE_SOLUTION_SUBMISSION,  # Заочный этап - прием решений
+        StageType.ON_SITE_TASK_DISTRIBUTION,  # Очный этап - распределение заданий
+        StageType.ON_SITE_SOLUTION_SUBMISSION  # Очный этап - прием решений
+    ])
 
-    team_query = select(Team).where(Team.id == team_id)
+    active_event = await get_active_event(session)
+    
+    # Получаем команду с проверкой event_id
+    team_query = select(Team).where(
+        Team.id == team_id,
+        Team.event_id == active_event.id
+    )
     team = await session.execute(team_query)
     team = team.scalar_one_or_none()
 
     if not team:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Команда не найдена"
+            detail="Команда не найдена или не принадлежит активному событию"
+        )
+
+    # Проверяем, является ли это очным этапом (по типу или группе)
+    from src.utils.stage_group_utils import is_on_site_stage
+    
+    is_on_site = is_on_site_stage(current_stage)
+    
+    # Если очный этап, проверяем, что команда является финалистом
+    if is_on_site and not team.is_finalist:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Только команды-финалисты могут загружать решения на очном этапе"
         )
 
     member_query = select(TeamMember).where(
@@ -1811,13 +2150,27 @@ async def update_solution_link(
             detail="Вы не являетесь участником этой команды"
         )
 
-    team.solution_link = solution_link
+    # Валидация GitHub URL
+    from src.utils.github_validator import validate_github_url, normalize_github_url
+    
+    is_valid, error_message = validate_github_url(solution_link)
+    if not is_valid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=error_message
+        )
+    
+    # Нормализуем URL к стандартному формату
+    normalized_link = normalize_github_url(solution_link)
+    
+    team.solution_link = normalized_link
     await session.commit()
     await session.refresh(team)
 
     return {
         "message": "Ссылка на решение успешно обновлена",
-        "solution_link": team.solution_link
+        "solution_link": team.solution_link,
+        "security_note": "⚠️ Убедитесь, что репозиторий приватный и вы добавили организаторов/жюри в Settings → Collaborators с правами Read."
     }
 
 
@@ -1954,4 +2307,388 @@ async def notify_closing_ceremony(
 
     return {
         "message": "Запущена рассылка уведомлений о торжественном закрытии хакатона"
+    }
+
+
+@router.get("/public/active-count")
+async def get_active_teams_count(
+        session: AsyncSession = Depends(get_session)
+):
+    """Получить количество активных команд для активного события (публичный endpoint)"""
+    from src.utils.event_utils import get_active_event
+    from src.utils.team_utils import check_active_teams
+    import logging
+    
+    logger = logging.getLogger(__name__)
+    
+    try:
+        active_event = await get_active_event(session)
+        logger.info(f"Активное событие найдено: {active_event.id}")
+    except Exception as e:
+        logger.error(f"Ошибка получения активного события: {e}", exc_info=True)
+        return {"active_teams_count": 0, "max_teams": 20}
+    
+    try:
+        active_teams = await check_active_teams(session)
+        active_teams_count = len(active_teams)
+        logger.info(f"Найдено активных команд: {active_teams_count}")
+    except Exception as e:
+        logger.error(f"Ошибка при подсчете активных команд: {e}", exc_info=True)
+        # Возвращаем 0 вместо ошибки, чтобы не ломать фронтенд
+        return {"active_teams_count": 0, "max_teams": 20}
+    
+    return {
+        "active_teams_count": active_teams_count,
+        "max_teams": 20
+    }
+
+
+@router.get("/public/finalists", response_model=dict)
+async def get_public_finalists(
+    session: AsyncSession = Depends(get_session)
+):
+    """
+    Публичное получение списка финалистов активного события без авторизации.
+    Возвращает топ-4 команды как финалистов и остальные команды как "оставшиеся".
+    """
+    from src.models.user import ParticipantInfo
+    from src.utils.finalists_utils import get_top_finalists_by_scores
+    
+    active_event = await get_active_event(session)
+    
+    # Получаем топ-4 финалистов на основе оценок заочного этапа
+    top_finalists = await get_top_finalists_by_scores(
+        session, active_event.id, stage_group="remote", count=4
+    )
+    finalist_ids = {team.id for team in top_finalists}
+    
+    # Получаем все команды события с участниками
+    query = (
+        select(Team)
+        .options(
+            selectinload(Team.members)
+            .selectinload(TeamMember.user)
+            .selectinload(User.participant_info),
+            selectinload(Team.members)
+            .selectinload(TeamMember.user)
+            .selectinload(User.current_status),
+            selectinload(Team.members)
+            .selectinload(TeamMember.role),
+            selectinload(Team.members)
+            .selectinload(TeamMember.status)
+        )
+        .where(Team.event_id == active_event.id)
+    )
+    
+    result = await session.execute(query)
+    all_teams = result.scalars().all()
+    
+    # Получаем итоговые баллы для всех команд
+    from src.models.evaluation import TeamEvaluation
+    from sqlalchemy import func
+    
+    # Получаем суммы баллов для всех команд события
+    scores_query = (
+        select(
+            TeamEvaluation.team_id,
+            func.sum(
+                TeamEvaluation.criterion_1 +
+                TeamEvaluation.criterion_2 +
+                TeamEvaluation.criterion_3 +
+                TeamEvaluation.criterion_4 +
+                TeamEvaluation.criterion_5
+            ).label('total_score')
+        )
+        .where(TeamEvaluation.event_id == active_event.id)
+        .group_by(TeamEvaluation.team_id)
+    )
+    scores_result = await session.execute(scores_query)
+    team_scores = {row.team_id: float(row.total_score) for row in scores_result.all()}
+    
+    finalists = []
+    remaining_teams = []
+    
+    for team in all_teams:
+        # Фильтруем только активные команды для оставшихся
+        if team.id not in finalist_ids:
+            if not team.can_participate():
+                continue
+        
+        # Получаем активных участников
+        active_members = [
+            member for member in team.members
+            if member.status.name == TeamMemberStatus.ACCEPTED.value
+        ]
+        
+        # Собираем информацию об участниках и вузах
+        members_info = []
+        vuz_list = set()
+        
+        for member in active_members:
+            user = member.user
+            member_data = {
+                "full_name": user.full_name,
+                "role": member.role.name
+            }
+            
+            # Добавляем информацию о вузе, если есть
+            if user.participant_info:
+                vuz = user.participant_info.vuz
+                if vuz:
+                    vuz_list.add(vuz)
+                member_data["vuz"] = vuz
+            
+            members_info.append(member_data)
+        
+        # Получаем итоговый балл команды
+        total_score = team_scores.get(team.id, 0.0)
+        
+        team_data = {
+            "team_id": str(team.id),
+            "team_name": team.team_name,
+            "team_motto": team.team_motto or "",
+            "logo_file_id": str(team.logo_file_id) if team.logo_file_id else None,
+            "members": members_info,
+            "vuz_list": list(vuz_list),
+            "total_score": total_score
+        }
+        
+        # Разделяем на финалистов (топ-4) и остальные команды
+        if team.id in finalist_ids:
+            finalists.append(team_data)
+        else:
+            remaining_teams.append(team_data)
+    
+    # Сортируем финалистов по баллам (убывание)
+    finalists.sort(key=lambda x: x.get('total_score', 0), reverse=True)
+    # Сортируем оставшиеся команды по баллам (убывание)
+    remaining_teams.sort(key=lambda x: x.get('total_score', 0), reverse=True)
+    
+    return {
+        "finalists": finalists,  # Топ-4 команды
+        "remaining_teams": remaining_teams  # Остальные активные команды
+    }
+
+
+@router.get("/judge/{team_id}/info", response_model=dict)
+async def get_judge_team_info(
+    team_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session)
+):
+    """Получение информации о команде для жюри (для оценки)"""
+    from src.models.user import ParticipantInfo
+    
+    # Проверяем, что пользователь является жюри
+    user_roles_query = select(User2Roles).where(User2Roles.user_id == current_user.id)
+    user_roles = await session.execute(user_roles_query)
+    user_roles = user_roles.scalars().all()
+    
+    is_judge = any(
+        role.role_id == user_router_state.judge_role_id
+        for role in user_roles
+    )
+    
+    is_admin = any(
+        role.role_id == user_router_state.admin_role_id
+        for role in user_roles
+    )
+    
+    if not (is_judge or is_admin):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Доступ разрешен только для жюри и администраторов"
+        )
+    
+    active_event = await get_active_event(session)
+    
+    # Получаем команду с участниками
+    query = (
+        select(Team)
+        .options(
+            selectinload(Team.members)
+            .selectinload(TeamMember.user)
+            .selectinload(User.participant_info),
+            selectinload(Team.members)
+            .selectinload(TeamMember.user)
+            .selectinload(User.current_status),
+            selectinload(Team.members)
+            .selectinload(TeamMember.role),
+            selectinload(Team.members)
+            .selectinload(TeamMember.status)
+        )
+        .where(
+            Team.id == team_id,
+            Team.event_id == active_event.id
+        )
+    )
+    
+    result = await session.execute(query)
+    team = result.scalar_one_or_none()
+    
+    if not team:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Команда не найдена или не принадлежит активному событию"
+        )
+    
+    # Получаем активных участников
+    active_members = [
+        member for member in team.members
+        if member.status.name == TeamMemberStatus.ACCEPTED.value
+    ]
+    
+    # Собираем информацию об участниках и вузах
+    members_info = []
+    vuz_list = set()
+    
+    for member in active_members:
+        user = member.user
+        member_data = {
+            "full_name": user.full_name,
+            "role": member.role.name
+        }
+        
+        # Добавляем информацию о вузе, если есть
+        if user.participant_info:
+            vuz = user.participant_info.vuz
+            if vuz:
+                vuz_list.add(vuz)
+            member_data["vuz"] = vuz
+        
+        members_info.append(member_data)
+    
+    return {
+        "team_id": str(team.id),
+        "team_name": team.team_name,
+        "team_motto": team.team_motto or "",
+        "solution_link": team.solution_link,
+        "logo_file_id": str(team.logo_file_id) if team.logo_file_id else None,
+        "members": members_info,
+        "vuz_list": list(vuz_list)
+    }
+
+
+@router.get("/public/{team_id}/info", response_model=dict)
+async def get_public_team_info(
+    team_id: uuid.UUID,
+    event_id: Optional[uuid.UUID] = Query(None, description="ID события (опционально, если не указан - используется активное событие)"),
+    session: AsyncSession = Depends(get_session)
+):
+    """Публичное получение информации о команде (для победителей и финалистов) без авторизации"""
+    from src.models.user import ParticipantInfo
+    
+    # Если event_id не указан, используем активное событие
+    # Иначе используем указанное событие (для прошлых результатов)
+    if event_id:
+        event_query = select(Event).where(Event.id == event_id)
+        event_result = await session.execute(event_query)
+        event = event_result.scalar_one_or_none()
+        if not event:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Событие не найдено"
+            )
+        target_event = event
+    else:
+        target_event = await get_active_event(session)
+    
+    # Получаем команду с участниками
+    query = (
+        select(Team)
+        .options(
+            selectinload(Team.members)
+            .selectinload(TeamMember.user)
+            .selectinload(User.participant_info),
+            selectinload(Team.members)
+            .selectinload(TeamMember.role),
+            selectinload(Team.members)
+            .selectinload(TeamMember.status)
+        )
+        .where(
+            Team.id == team_id,
+            Team.event_id == target_event.id
+        )
+    )
+    
+    result = await session.execute(query)
+    team = result.scalar_one_or_none()
+    
+    if not team:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Команда не найдена или не принадлежит указанному событию"
+        )
+    
+    # Проверяем, что команда является финалистом или победителем
+    # (для победителей проверяем наличие оценок)
+    if not team.is_finalist:
+        # Проверяем, есть ли у команды оценки (т.е. она участвовала в оценке)
+        evaluation_query = select(func.count(TeamEvaluation.id)).where(
+            TeamEvaluation.team_id == team_id,
+            TeamEvaluation.event_id == target_event.id
+        )
+        evaluation_result = await session.execute(evaluation_query)
+        evaluations_count = evaluation_result.scalar() or 0
+        
+        if evaluations_count == 0:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Информация доступна только для финалистов и победителей"
+            )
+    
+    # Получаем активных участников
+    active_members = [
+        member for member in team.members
+        if member.status.name == TeamMemberStatus.ACCEPTED.value
+    ]
+    
+    # Собираем информацию об участниках и вузах
+    members_info = []
+    vuz_list = set()
+    
+    for member in active_members:
+        user = member.user
+        member_data = {
+            "full_name": user.full_name,
+            "role": member.role.name
+        }
+        
+        # Добавляем информацию о вузе, если есть
+        if user.participant_info:
+            vuz = user.participant_info.vuz
+            if vuz:
+                vuz_list.add(vuz)
+            member_data["vuz"] = vuz
+        
+        members_info.append(member_data)
+    
+    # Получаем итоговый балл, если есть оценки
+    total_score = None
+    score_query = select(
+        func.sum(
+            TeamEvaluation.criterion_1 +
+            TeamEvaluation.criterion_2 +
+            TeamEvaluation.criterion_3 +
+            TeamEvaluation.criterion_4 +
+            TeamEvaluation.criterion_5
+        ).label('total_score')
+    ).where(
+        TeamEvaluation.team_id == team_id,
+        TeamEvaluation.event_id == target_event.id
+    )
+    
+    score_result = await session.execute(score_query)
+    score_row = score_result.first()
+    if score_row and score_row.total_score:
+        total_score = float(score_row.total_score)
+    
+    return {
+        "team_id": str(team.id),
+        "team_name": team.team_name,
+        "team_motto": team.team_motto or "",
+        "logo_file_id": str(team.logo_file_id) if team.logo_file_id else None,
+        "members": members_info,
+        "vuz_list": list(vuz_list),
+        "total_score": total_score
     }

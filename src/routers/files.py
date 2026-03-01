@@ -1,10 +1,11 @@
 import uuid
+import os
+from urllib.parse import unquote, quote
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-import os
 
 from sqlalchemy.orm import selectinload
 
@@ -15,14 +16,62 @@ from src.utils.router_states import user_router_state
 
 router = APIRouter(prefix="/files", tags=["files"])
 
+# Путь к статическим файлам (исходные данные)
+STATIC_FILES_DIR = "files"
+
+
+@router.get("/static/{filename:path}")
+async def get_static_file(filename: str):
+    """Получение статических файлов (исходные данные, задания)"""
+    # Декодируем URL-encoded имя файла
+    try:
+        decoded_filename = unquote(filename)
+    except Exception:
+        decoded_filename = filename
+    
+    # Безопасность: проверяем, что путь не содержит переходов вверх
+    if ".." in decoded_filename or "/" in decoded_filename or "\\" in decoded_filename:
+        raise HTTPException(status_code=400, detail="Недопустимый путь к файлу")
+    
+    full_path = os.path.join(STATIC_FILES_DIR, decoded_filename)
+    
+    if not os.path.exists(full_path):
+        raise HTTPException(status_code=404, detail="Файл не найден")
+    
+    # Определяем MIME тип по расширению
+    file_ext = os.path.splitext(decoded_filename)[1].lower()
+    content_types = {
+        '.pdf': 'application/pdf',
+        '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        '.doc': 'application/msword',
+        '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        '.xls': 'application/vnd.ms-excel',
+        '.txt': 'text/plain',
+        '.md': 'text/markdown'
+    }
+    media_type = content_types.get(file_ext, 'application/octet-stream')
+    
+    return FileResponse(
+        path=full_path,
+        filename=decoded_filename,
+        media_type=media_type
+    )
+
 
 @router.get("/{file_id}")
 async def get_file(
-        file_id: uuid.UUID,
+        file_id: str,
         current_user: User = Depends(get_current_user),
         session: AsyncSession = Depends(get_session)
 ):
-    """Получение файла по его ID"""
+    """Получение файла по ID из БД"""
+    # Пытаемся распарсить как UUID
+    try:
+        file_uuid = uuid.UUID(file_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Файл не найден")
+    
+    # Это UUID - обрабатываем как файл из БД
     current_user_query = (
         select(User)
         .options(selectinload(User.user2roles))
@@ -36,7 +85,7 @@ async def get_file(
         .options(
             selectinload(FileModel.file_format)
         )
-        .where(FileModel.id == file_id)
+        .where(FileModel.id == file_uuid)
     )
     result = await session.execute(query)
     file = result.scalar_one_or_none()

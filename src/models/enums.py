@@ -58,3 +58,11 @@ class StageType(Enum):
     ONLINE_DEFENSE = "online_defense"
     RESULTS_PUBLICATION = "results_publication"
     AWARD_CEREMONY = "award_ceremony"
+    # Новые типы для двухэтапного хакатона
+    REMOTE_TASK_DISTRIBUTION = "remote_task_distribution"  # Заочный этап - распределение заданий
+    REMOTE_SOLUTION_SUBMISSION = "remote_solution_submission"  # Заочный этап - прием решений
+    REMOTE_SOLUTION_REVIEW = "remote_solution_review"  # Устаревший тип - не используется (оценка происходит на этапе ONLINE_DEFENSE)
+    FINALISTS_SELECTION = "finalists_selection"  # Определение финалистов
+    ON_SITE_TASK_DISTRIBUTION = "on_site_task_distribution"  # Очный этап - распределение заданий
+    ON_SITE_SOLUTION_SUBMISSION = "on_site_solution_submission"  # Очный этап - прием решений
+    ON_SITE_DEFENSE = "on_site_defense"  # Очный этап - защита

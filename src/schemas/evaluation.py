@@ -23,6 +23,7 @@ class TeamEvaluationResponse(TeamEvaluationBase):
     team_name: str
     team_motto: str
     judge_id: UUID
+    stage_id: Optional[UUID] = None
     created_at: datetime
     updated_at: Optional[datetime]
     total_score: int

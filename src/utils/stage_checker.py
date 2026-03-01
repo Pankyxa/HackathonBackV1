@@ -4,19 +4,24 @@ from src.models.stage import Stage
 from src.models.enums import StageType
 from typing import List, Union
 from sqlalchemy import select
+from src.utils.event_utils import get_active_event
 
 
 async def check_stage(db: AsyncSession, allowed_stages: Union[StageType, List[StageType]]) -> Stage:
     """
-    Проверяет, находится ли система на допустимом этапе
+    Проверяет, находится ли система на допустимом этапе активного события
 
     :param db: AsyncSession базы данных
     :param allowed_stages: Этап или список этапов, на которых разрешена операция
     :return: Текущий активный этап
     :raises: HTTPException если текущий этап не соответствует разрешенным
     """
+    active_event = await get_active_event(db)
     result = await db.execute(
-        select(Stage).where(Stage.is_active == True)
+        select(Stage).where(
+            Stage.is_active == True,
+            Stage.event_id == active_event.id
+        )
     )
     current_stage = result.scalar_one_or_none()
 

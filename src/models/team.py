@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import List, Optional
 
-from sqlalchemy import Column, String, ForeignKey, DateTime
+from sqlalchemy import Column, String, ForeignKey, DateTime, Boolean
 from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.postgresql import UUID
 import uuid
@@ -20,43 +20,68 @@ class Team(Base):
     team_leader_id = Column(UUID(as_uuid=True), ForeignKey('users.id'), nullable=False)
     logo_file_id = Column(UUID(as_uuid=True), ForeignKey('files.id'), nullable=True)
     solution_link = Column(String(1024), nullable=True)
+    event_id = Column(UUID(as_uuid=True), ForeignKey('events.id'), nullable=False)
+    is_finalist = Column(Boolean, default=False, nullable=False)  # Является ли команда финалистом
 
     # Relationships
     team_leader = relationship("User", back_populates="teams_as_leader")
     members = relationship("TeamMember", back_populates="team")
     logo = relationship("File", foreign_keys=[logo_file_id])
     files = relationship("File", back_populates="team", foreign_keys=[File.team_id])
+    event = relationship("Event", back_populates="teams")
 
     def get_active_members(self) -> List["TeamMember"]:
         """Получение списка принятых участников команды"""
-        return [
-            member for member in self.members
-            if member.status.name == TeamMemberStatus.ACCEPTED.value
-        ]
+        try:
+            return [
+                member for member in self.members
+                if hasattr(member, 'status') and member.status and 
+                   hasattr(member.status, 'name') and 
+                   member.status.name == TeamMemberStatus.ACCEPTED.value
+            ]
+        except Exception:
+            # Если произошла ошибка при доступе к данным (например, lazy loading),
+            # возвращаем пустой список
+            return []
 
     def get_mentor(self) -> Optional["TeamMember"]:
         """Получение наставника команды"""
-        active_members = self.get_active_members()
-        for member in active_members:
-            if member.role.name == TeamRole.MENTOR.value:
-                return member
-        return None
+        try:
+            active_members = self.get_active_members()
+            for member in active_members:
+                if (hasattr(member, 'role') and member.role and 
+                    hasattr(member.role, 'name') and 
+                    member.role.name == TeamRole.MENTOR.value):
+                    return member
+            return None
+        except Exception:
+            return None
 
     def get_team_leader_member(self) -> Optional["TeamMember"]:
         """Получение тимлида как участника команды"""
-        active_members = self.get_active_members()
-        for member in active_members:
-            if member.role.name == TeamRole.TEAMLEAD.value:
-                return member
-        return None
+        try:
+            active_members = self.get_active_members()
+            for member in active_members:
+                if (hasattr(member, 'role') and member.role and 
+                    hasattr(member.role, 'name') and 
+                    member.role.name == TeamRole.TEAMLEAD.value):
+                    return member
+            return None
+        except Exception:
+            return None
 
     def get_regular_members(self) -> List["TeamMember"]:
         """Получение обычных участников команды (не тимлид и не наставник)"""
-        active_members = self.get_active_members()
-        return [
-            member for member in active_members
-            if member.role.name == TeamRole.MEMBER.value
-        ]
+        try:
+            active_members = self.get_active_members()
+            return [
+                member for member in active_members
+                if (hasattr(member, 'role') and member.role and 
+                    hasattr(member.role, 'name') and 
+                    member.role.name == TeamRole.MEMBER.value)
+            ]
+        except Exception:
+            return []
 
     def get_status(self) -> str:
         """Вычисляемый статус команды"""

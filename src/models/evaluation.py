@@ -14,6 +14,8 @@ class TeamEvaluation(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     team_id = Column(UUID(as_uuid=True), ForeignKey('teams.id'), nullable=False)
     judge_id = Column(UUID(as_uuid=True), ForeignKey('users.id'), nullable=False)
+    event_id = Column(UUID(as_uuid=True), ForeignKey('events.id'), nullable=False)
+    stage_id = Column(UUID(as_uuid=True), ForeignKey('stages.id'), nullable=True)  # Этап, на котором была выставлена оценка
 
     criterion_1 = Column(Integer, nullable=False)  # Соответствие результата
     criterion_2 = Column(Integer, nullable=False)  # Корректность, оригинальность и инновационность
@@ -27,6 +29,8 @@ class TeamEvaluation(Base):
     # Relationships
     team = relationship("Team", backref="evaluations")
     judge = relationship("User")
+    event = relationship("Event", back_populates="evaluations")
+    stage = relationship("Stage", backref="evaluations")
 
     def get_total_score(self) -> int:
         """Подсчет суммарного балла по всем критериям"""

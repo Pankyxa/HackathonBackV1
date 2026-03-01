@@ -8,6 +8,7 @@ from src.models.enums import (
 )
 from src.utils.enum_utils import get_enum_data
 from src.models import Stage
+from src.utils.event_utils import get_active_event
 
 
 class TeamRouterState:
@@ -139,18 +140,32 @@ class StageRouterState:
         self.results_publication_stage_id = enum_data.get_stage_id(StageType.RESULTS_PUBLICATION)
         self.award_ceremony_stage_id = enum_data.get_stage_id(StageType.AWARD_CEREMONY)
 
-        result = await session.execute(
-            select(Stage).where(Stage.is_active == True)
-        )
-        current_stage = result.scalar_one_or_none()
-        if current_stage:
-            self.current_stage_id = current_stage.id
-            self.current_stage_order = current_stage.order
+        # Получаем активный этап только для активного события
+        try:
+            active_event = await get_active_event(session)
+            result = await session.execute(
+                select(Stage).where(
+                    Stage.is_active == True,
+                    Stage.event_id == active_event.id
+                )
+            )
+            current_stage = result.scalar_one_or_none()
+            if current_stage:
+                self.current_stage_id = current_stage.id
+                self.current_stage_order = current_stage.order
+        except Exception:
+            # Если нет активного события, оставляем значения None
+            self.current_stage_id = None
+            self.current_stage_order = None
 
     async def get_current_stage_order(self, session: AsyncSession) -> int:
         """Получить порядковый номер текущего этапа"""
+        active_event = await get_active_event(session)
         result = await session.execute(
-            select(Stage.order).where(Stage.is_active == True)
+            select(Stage.order).where(
+                Stage.is_active == True,
+                Stage.event_id == active_event.id
+            )
         )
         current_stage = result.scalar_one_or_none()
         self.current_stage_order = current_stage

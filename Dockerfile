@@ -1,17 +1,23 @@
-# Set the base image using Python 3.12 and Debian Bookworm
+# Используем Python 3.12
 FROM python:3.12-slim-bookworm
 
-# Set the working directory to /app
 WORKDIR /app
 
-# Copy only the necessary files to the working directory
-COPY . /app
+# 1. Сначала копируем ТОЛЬКО requirements.txt
+# Это позволяет Docker кэшировать установку библиотек, если файл не менялся
+COPY requirements.txt .
 
-# Install the requirements
-RUN pip install --no-cache-dir --upgrade -r /app/requirements.txt
+# 2. ВАЖНО: Обновляем pip и устанавливаем необходимые пакеты
+# Устанавливаем setuptools с опцией --legacy-installation для обеспечения доступа к pkg_resources
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir setuptools==68.2.2 wheel
 
-# Expose the port the app runs on
+# 3. Устанавливаем остальные зависимости из файла
+RUN pip install --no-cache-dir -r requirements.txt
+
+# 4. Копируем остальной код проекта
+COPY . .
+
 EXPOSE 3000
 
-# Run the FastAPI app with uvicorn
 CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "3000", "--reload"]

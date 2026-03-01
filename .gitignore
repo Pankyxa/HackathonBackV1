@@ -42,3 +42,18 @@ ENV/
 
 # User files
 uploads/*
+
+# Static files (tasks, initial data)
+files/*
+!files/.gitkeep
+
+# Backup files
+*.sql
+
+# Documentation files (local only)
+AUTO_ACTIVATION_SYSTEM.md
+GITHUB_REPOSITORY_GUIDE.md
+HOW_TO_ADD_STAGE_TYPE.md
+STAGES_STRUCTURE.md
+STAGE_GROUP_LOGIC.md
+TESTING_CHECKLIST_REGISTRATION.md

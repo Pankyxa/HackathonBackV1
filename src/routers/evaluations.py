@@ -1,9 +1,9 @@
 import uuid
 from datetime import datetime
-from typing import List
-from fastapi import APIRouter, Depends, HTTPException, status
+from typing import List, Optional
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, and_
 from sqlalchemy.orm import selectinload
 
 from src.auth.jwt import get_current_user
@@ -11,12 +11,23 @@ from src.db import get_session
 from src.models.user import User, User2Roles
 from src.models.team import Team, TeamMember
 from src.models.evaluation import TeamEvaluation
+from src.models.event import EventJudge
+from src.models.stage import Stage
 from src.schemas.evaluation import (
     TeamEvaluationCreate,
     TeamEvaluationResponse,
     TeamTotalScore, UnevaluatedTeam, DetailedTeamEvaluationResponse
 )
 from src.utils.router_states import user_router_state
+from src.utils.event_utils import get_active_event
+from src.utils.stage_checker import check_stage
+from src.utils.evaluation_utils import (
+    filter_evaluations_by_stage_group,
+    get_current_stage_group,
+    get_stages_by_group
+)
+from src.utils.cache import cache, invalidate_evaluation_cache
+from src.models.enums import StageType
 
 router = APIRouter(
     prefix="/evaluations",
@@ -31,6 +42,16 @@ async def create_evaluation(
         session: AsyncSession = Depends(get_session)
 ):
     """Создание оценки команды членом жюри"""
+    # Проверяем, что текущий этап позволяет оценивать команды
+    current_stage = await check_stage(session, [
+        StageType.ONLINE_DEFENSE,  # Заочный этап - онлайн защита (оценка происходит здесь)
+        StageType.ON_SITE_DEFENSE,  # Очный этап - проверка решений (защита)
+        StageType.SOLUTION_REVIEW  # Старый тип (для совместимости)
+    ])
+    
+    # Получаем ID текущего этапа для сохранения в оценке
+    current_stage_id = current_stage.id
+    
     user_roles_query = select(User2Roles).where(User2Roles.user_id == current_user.id)
     user_roles = await session.execute(user_roles_query)
     user_roles = user_roles.scalars().all()
@@ -43,9 +64,14 @@ async def create_evaluation(
     if not is_judge:
         raise HTTPException(status_code=403, detail="Only judges can evaluate teams")
 
+    active_event = await get_active_event(session)
+    
     team_query = (
         select(Team)
-        .where(Team.id == evaluation.team_id)
+        .where(
+            Team.id == evaluation.team_id,
+            Team.event_id == active_event.id
+        )
     )
     team = await session.execute(team_query)
     team = team.scalar_one_or_none()
@@ -53,14 +79,17 @@ async def create_evaluation(
     if not team:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Команда не найдена"
+            detail="Команда не найдена или не принадлежит активному событию"
         )
 
+    # Ищем существующую оценку для этого этапа (чтобы обновлять оценку на том же этапе)
     existing_evaluation_query = (
         select(TeamEvaluation)
         .where(
             TeamEvaluation.team_id == evaluation.team_id,
-            TeamEvaluation.judge_id == current_user.id
+            TeamEvaluation.judge_id == current_user.id,
+            TeamEvaluation.event_id == active_event.id,
+            TeamEvaluation.stage_id == current_stage_id
         )
     )
     existing_evaluation = await session.execute(existing_evaluation_query)
@@ -72,8 +101,12 @@ async def create_evaluation(
         existing_evaluation.criterion_3 = evaluation.criterion_3
         existing_evaluation.criterion_4 = evaluation.criterion_4
         existing_evaluation.criterion_5 = evaluation.criterion_5
+        existing_evaluation.stage_id = current_stage_id  # Обновляем stage_id на случай изменения
         existing_evaluation.updated_at = datetime.utcnow()
         await session.commit()
+        
+        # Инвалидируем кэш оценок
+        await invalidate_evaluation_cache(event_id=str(active_event.id), team_id=str(evaluation.team_id))
 
         return TeamEvaluationResponse(
             id=existing_evaluation.id,
@@ -81,6 +114,7 @@ async def create_evaluation(
             team_name=team.team_name,
             team_motto=team.team_motto,
             judge_id=existing_evaluation.judge_id,
+            stage_id=existing_evaluation.stage_id,
             criterion_1=existing_evaluation.criterion_1,
             criterion_2=existing_evaluation.criterion_2,
             criterion_3=existing_evaluation.criterion_3,
@@ -95,6 +129,8 @@ async def create_evaluation(
             id=uuid.uuid4(),
             team_id=evaluation.team_id,
             judge_id=current_user.id,
+            event_id=active_event.id,
+            stage_id=current_stage_id,  # Сохраняем ID этапа, на котором выставлена оценка
             criterion_1=evaluation.criterion_1,
             criterion_2=evaluation.criterion_2,
             criterion_3=evaluation.criterion_3,
@@ -105,6 +141,9 @@ async def create_evaluation(
         session.add(new_evaluation)
         await session.commit()
         await session.refresh(new_evaluation)
+        
+        # Инвалидируем кэш оценок
+        await invalidate_evaluation_cache(event_id=str(active_event.id), team_id=str(evaluation.team_id))
 
         return TeamEvaluationResponse(
             id=new_evaluation.id,
@@ -112,6 +151,7 @@ async def create_evaluation(
             team_name=team.team_name,
             team_motto=team.team_motto,
             judge_id=new_evaluation.judge_id,
+            stage_id=new_evaluation.stage_id,
             criterion_1=new_evaluation.criterion_1,
             criterion_2=new_evaluation.criterion_2,
             criterion_3=new_evaluation.criterion_3,
@@ -126,10 +166,11 @@ async def create_evaluation(
 @router.get("/team/{team_id}", response_model=List[TeamEvaluationResponse])
 async def get_team_evaluations(
         team_id: str,
+        stage_group: Optional[str] = Query(None, description="Группа этапа: 'remote' (заочный) или 'on_site' (очный). Если не указано, используется текущий активный этап"),
         current_user: User = Depends(get_current_user),
         session: AsyncSession = Depends(get_session)
 ):
-    """Получение всех оценок команды"""
+    """Получение оценок команды, отфильтрованных по группе этапа (заочный/очный)"""
     user_roles_query = select(User2Roles).where(User2Roles.user_id == current_user.id)
     user_roles = await session.execute(user_roles_query)
     user_roles = user_roles.scalars().all()
@@ -149,11 +190,35 @@ async def get_team_evaluations(
             detail="Only judges and administrators can view evaluations"
         )
 
-    result = await session.execute(
-        select(TeamEvaluation)
-        .options(selectinload(TeamEvaluation.team))
-        .where(TeamEvaluation.team_id == team_id)
+    active_event = await get_active_event(session)
+    
+    # Базовый запрос
+    base_query = select(TeamEvaluation).options(
+        selectinload(TeamEvaluation.team)
+    ).where(
+        TeamEvaluation.team_id == team_id,
+        TeamEvaluation.event_id == active_event.id
     )
+    
+    # Если указана группа этапа, фильтруем по ней
+    if stage_group:
+        if stage_group not in ['remote', 'on_site']:
+            raise HTTPException(
+                status_code=400,
+                detail="stage_group должен быть 'remote' или 'on_site'"
+            )
+        base_query = await filter_evaluations_by_stage_group(
+            session, base_query, stage_group, str(active_event.id)
+        )
+    else:
+        # Если группа не указана, используем текущий активный этап
+        current_group = await get_current_stage_group(session)
+        if current_group:
+            base_query = await filter_evaluations_by_stage_group(
+                session, base_query, current_group, str(active_event.id)
+            )
+    
+    result = await session.execute(base_query)
     evaluations = result.scalars().all()
 
     evaluation_responses = [
@@ -163,6 +228,7 @@ async def get_team_evaluations(
             team_name=eval.team.team_name,
             team_motto=eval.team.team_motto,
             judge_id=eval.judge_id,
+            stage_id=eval.stage_id,
             criterion_1=eval.criterion_1,
             criterion_2=eval.criterion_2,
             criterion_3=eval.criterion_3,
@@ -183,10 +249,11 @@ async def get_team_evaluations(
 
 @router.get("/results", response_model=List[TeamTotalScore])
 async def get_evaluation_results(
+        stage_group: Optional[str] = Query(None, description="Группа этапа: 'remote' (заочный) или 'on_site' (очный). Если не указано, используется текущий активный этап"),
         current_user: User = Depends(get_current_user),
         session: AsyncSession = Depends(get_session)
 ):
-    """Получение итоговых результатов всех команд"""
+    """Получение итоговых результатов всех команд, отфильтрованных по группе этапа"""
     user_roles_query = select(User2Roles).where(User2Roles.user_id == current_user.id)
     user_roles = await session.execute(user_roles_query)
     user_roles = user_roles.scalars().all()
@@ -206,9 +273,11 @@ async def get_evaluation_results(
             detail="Only judges and administrators can view results"
         )
 
+    active_event = await get_active_event(session)
     latest_evaluations = (
         select(TeamEvaluation.id)
         .distinct(TeamEvaluation.judge_id, TeamEvaluation.team_id)
+        .where(TeamEvaluation.event_id == active_event.id)
         .order_by(
             TeamEvaluation.judge_id,
             TeamEvaluation.team_id,
@@ -239,6 +308,7 @@ async def get_evaluation_results(
         TeamEvaluation,
         Team.id == TeamEvaluation.team_id
     ).where(
+        Team.event_id == active_event.id,
         TeamEvaluation.id.in_(latest_evaluations)
     ).group_by(
         Team.id,
@@ -251,10 +321,11 @@ async def get_evaluation_results(
 
 @router.get("/my-evaluations", response_model=List[TeamEvaluationResponse])
 async def get_judge_evaluations(
+        stage_group: Optional[str] = Query(None, description="Группа этапа: 'remote' (заочный) или 'on_site' (очный). Если не указано, используется текущий активный этап"),
         current_user: User = Depends(get_current_user),
         session: AsyncSession = Depends(get_session)
 ):
-    """Получение всех оценок, выставленных текущим членом жюри"""
+    """Получение оценок, выставленных текущим членом жюри, отфильтрованных по группе этапа"""
     user_roles_query = select(User2Roles).where(User2Roles.user_id == current_user.id)
     user_roles = await session.execute(user_roles_query)
     user_roles = user_roles.scalars().all()
@@ -267,12 +338,56 @@ async def get_judge_evaluations(
     if not is_judge:
         raise HTTPException(status_code=403, detail="Only judges can access this endpoint")
 
-    result = await session.execute(
-        select(TeamEvaluation)
-        .options(selectinload(TeamEvaluation.team))
-        .where(TeamEvaluation.judge_id == current_user.id)
+    active_event = await get_active_event(session)
+    
+    # Определяем группу этапа для фильтрации
+    target_stage_group = stage_group
+    if not target_stage_group:
+        # Если группа не указана, используем текущий активный этап
+        current_group = await get_current_stage_group(session)
+        target_stage_group = current_group
+    
+    # Если очный этап, получаем список финалистов для фильтрации
+    finalist_ids = None
+    if target_stage_group == 'on_site':
+        from src.utils.finalists_utils import get_top_finalists_by_scores
+        # Получаем топ-4 финалистов на основе оценок заочного этапа
+        finalist_teams = await get_top_finalists_by_scores(
+            session, active_event.id, stage_group="remote", count=4
+        )
+        finalist_ids = [team.id for team in finalist_teams]
+    
+    # Базовый запрос
+    base_query = select(TeamEvaluation).options(
+        selectinload(TeamEvaluation.team)
+    ).where(
+        TeamEvaluation.judge_id == current_user.id,
+        TeamEvaluation.event_id == active_event.id
     )
+    
+    # Если указана группа этапа, фильтруем по ней
+    if stage_group:
+        if stage_group not in ['remote', 'on_site']:
+            raise HTTPException(
+                status_code=400,
+                detail="stage_group должен быть 'remote' или 'on_site'"
+            )
+        base_query = await filter_evaluations_by_stage_group(
+            session, base_query, stage_group, active_event.id
+        )
+    else:
+        # Если группа не указана, используем текущий активный этап
+        if target_stage_group:
+            base_query = await filter_evaluations_by_stage_group(
+                session, base_query, target_stage_group, active_event.id
+            )
+    
+    result = await session.execute(base_query)
     evaluations = result.scalars().all()
+
+    # Фильтруем только финалистов для очного этапа
+    if finalist_ids is not None:
+        evaluations = [eval for eval in evaluations if eval.team_id in finalist_ids]
 
     evaluation_responses = [
         TeamEvaluationResponse(
@@ -301,10 +416,11 @@ async def get_judge_evaluations(
 
 @router.get("/unevaluated-teams", response_model=List[UnevaluatedTeam])
 async def get_unevaluated_teams(
+        stage_group: Optional[str] = Query(None, description="Группа этапа: 'remote' (заочный) или 'on_site' (очный). Если не указано, используется текущий активный этап"),
         current_user: User = Depends(get_current_user),
         session: AsyncSession = Depends(get_session)
 ):
-    """Получение списка команд, которые еще не были оценены текущим членом жюри"""
+    """Получение списка команд, которые еще не были оценены текущим членом жюри, отфильтрованных по группе этапа"""
     user_roles_query = select(User2Roles).where(User2Roles.user_id == current_user.id)
     user_roles = await session.execute(user_roles_query)
     user_roles = user_roles.scalars().all()
@@ -322,45 +438,136 @@ async def get_unevaluated_teams(
     if not is_judge and not is_admin:
         raise HTTPException(status_code=403, detail="Only judges can access this endpoint")
 
-    evaluated_teams_subquery = (
-        select(TeamEvaluation.team_id)
-        .options(selectinload(TeamEvaluation.team))
-        .where(TeamEvaluation.judge_id == current_user.id)
-        .scalar_subquery()
-    )
-
-    query = (
-        select(Team)
-        .options(
-            selectinload(Team.members)
-            .selectinload(TeamMember.user)
-            .selectinload(User.current_status),
-            selectinload(Team.members)
-            .selectinload(TeamMember.role),
-            selectinload(Team.members)
-            .selectinload(TeamMember.status)
+    active_event = await get_active_event(session)
+    
+    # Определяем группу этапа для фильтрации
+    target_stage_group = stage_group
+    if not target_stage_group:
+        # Если группа не указана, используем текущий активный этап
+        from src.utils.evaluation_utils import get_current_stage_group
+        target_stage_group = await get_current_stage_group(session)
+    
+    # Если очный этап, показываем только финалистов
+    if target_stage_group == 'on_site':
+        from src.utils.finalists_utils import get_top_finalists_by_scores
+        # Получаем топ-4 финалистов на основе оценок заочного этапа
+        finalist_teams = await get_top_finalists_by_scores(
+            session, active_event.id, stage_group="remote", count=4
         )
-        .where(Team.id.notin_(evaluated_teams_subquery))
-    )
+        finalist_ids = [team.id for team in finalist_teams]
+        
+        # Получаем этапы очной группы для фильтрации оценок
+        from src.utils.evaluation_utils import get_stages_by_group
+        on_site_stages = await get_stages_by_group(session, 'on_site', active_event.id)
+        on_site_stage_ids = [stage.id for stage in on_site_stages]
+        
+        evaluated_teams_subquery = (
+            select(TeamEvaluation.team_id)
+            .options(selectinload(TeamEvaluation.team))
+            .where(
+                TeamEvaluation.judge_id == current_user.id,
+                TeamEvaluation.event_id == active_event.id
+            )
+        )
+        
+        # Фильтруем оценки только по очным этапам
+        if on_site_stage_ids:
+            evaluated_teams_subquery = evaluated_teams_subquery.where(
+                TeamEvaluation.stage_id.in_(on_site_stage_ids)
+            )
+        
+        evaluated_teams_subquery = evaluated_teams_subquery.scalar_subquery()
+        
+        query = (
+            select(Team)
+            .options(
+                selectinload(Team.members)
+                .selectinload(TeamMember.user)
+                .selectinload(User.current_status),
+                selectinload(Team.members)
+                .selectinload(TeamMember.role),
+                selectinload(Team.members)
+                .selectinload(TeamMember.status)
+            )
+            .where(
+                Team.event_id == active_event.id,
+                Team.id.notin_(evaluated_teams_subquery),
+                Team.id.in_(finalist_ids)
+            )
+        )
+    else:
+        # Для заочного этапа получаем этапы заочной группы для фильтрации оценок
+        from src.utils.evaluation_utils import get_stages_by_group
+        remote_stages = await get_stages_by_group(session, 'remote', active_event.id)
+        remote_stage_ids = [stage.id for stage in remote_stages]
+        
+        evaluated_teams_subquery = (
+            select(TeamEvaluation.team_id)
+            .options(selectinload(TeamEvaluation.team))
+            .where(
+                TeamEvaluation.judge_id == current_user.id,
+                TeamEvaluation.event_id == active_event.id
+            )
+        )
+        
+        # Фильтруем оценки только по заочным этапам
+        if remote_stage_ids:
+            evaluated_teams_subquery = evaluated_teams_subquery.where(
+                TeamEvaluation.stage_id.in_(remote_stage_ids)
+            )
+        
+        evaluated_teams_subquery = evaluated_teams_subquery.scalar_subquery()
+
+        query = (
+            select(Team)
+            .options(
+                selectinload(Team.members)
+                .selectinload(TeamMember.user)
+                .selectinload(User.current_status),
+                selectinload(Team.members)
+                .selectinload(TeamMember.role),
+                selectinload(Team.members)
+                .selectinload(TeamMember.status)
+            )
+            .where(
+                Team.event_id == active_event.id,
+                Team.id.notin_(evaluated_teams_subquery)
+            )
+        )
+    
     result = await session.execute(query)
     teams = result.scalars().all()
 
-    participating_teams = [
-        UnevaluatedTeam(
-            team_id=team.id,
-            team_name=team.team_name,
-            team_motto=team.team_motto,
-            solution_link=team.solution_link
-        )
-        for team in teams
-        if team.can_participate()
-    ]
+    # Для очного этапа не применяем фильтр can_participate(), так как финалисты уже отфильтрованы
+    # Для заочного этапа применяем фильтр can_participate()
+    if target_stage_group == 'on_site':
+        participating_teams = [
+            UnevaluatedTeam(
+                team_id=team.id,
+                team_name=team.team_name,
+                team_motto=team.team_motto,
+                solution_link=team.solution_link
+            )
+            for team in teams
+        ]
+    else:
+        participating_teams = [
+            UnevaluatedTeam(
+                team_id=team.id,
+                team_name=team.team_name,
+                team_motto=team.team_motto,
+                solution_link=team.solution_link
+            )
+            for team in teams
+            if team.can_participate()
+        ]
 
     return participating_teams
 
 
 @router.get("/detailed", response_model=List[DetailedTeamEvaluationResponse])
 async def get_detailed_evaluations(
+        stage_group: Optional[str] = Query(None, description="Группа этапа: 'remote' (заочный) или 'on_site' (очный). Если не указано, используется текущий активный этап"),
         current_user: User = Depends(get_current_user),
         session: AsyncSession = Depends(get_session)
 ):
@@ -381,25 +588,101 @@ async def get_detailed_evaluations(
             detail="Only administrators and organizers can view detailed evaluations"
         )
 
-    teams_query = (
-        select(Team)
-        .options(
-            selectinload(Team.members)
-            .selectinload(TeamMember.user)
-            .selectinload(User.current_status),
-            selectinload(Team.members)
-            .selectinload(TeamMember.role),
-            selectinload(Team.members)
-            .selectinload(TeamMember.status)
+    active_event = await get_active_event(session)
+    
+    # Определяем группу этапа для фильтрации
+    target_stage_group = stage_group
+    if not target_stage_group:
+        # Если группа не указана, используем текущий активный этап
+        target_stage_group = await get_current_stage_group(session)
+        
+        # Если текущий этап - публикация результатов, определяем последнюю группу этапа с оценками
+        if not target_stage_group:
+            # Проверяем, является ли текущий этап публикацией результатов
+            current_stage_query = select(Stage).where(
+                and_(
+                    Stage.is_active == True,
+                    Stage.event_id == active_event.id
+                )
+            )
+            current_stage_result = await session.execute(current_stage_query)
+            current_stage = current_stage_result.scalar_one_or_none()
+            
+            if current_stage and current_stage.type == StageType.RESULTS_PUBLICATION.value:
+                # Проверяем, есть ли оценки для очного этапа
+                on_site_stages = await get_stages_by_group(session, 'on_site', active_event.id)
+                on_site_stage_ids = [stage.id for stage in on_site_stages]
+                
+                if on_site_stage_ids:
+                    on_site_evaluations_query = select(TeamEvaluation).where(
+                        and_(
+                            TeamEvaluation.event_id == active_event.id,
+                            TeamEvaluation.stage_id.in_(on_site_stage_ids)
+                        )
+                    )
+                    on_site_evaluations_result = await session.execute(on_site_evaluations_query)
+                    on_site_evaluations = on_site_evaluations_result.scalars().all()
+                    
+                    # Если есть оценки для очного этапа, используем их
+                    if on_site_evaluations:
+                        target_stage_group = 'on_site'
+                    else:
+                        # Иначе используем заочный этап
+                        target_stage_group = 'remote'
+                else:
+                    # Если нет очных этапов, используем заочный
+                    target_stage_group = 'remote'
+            else:
+                # Если нет активного этапа с группой, используем заочный по умолчанию
+                target_stage_group = 'remote'
+    
+    # Если очный этап, показываем только финалистов
+    if target_stage_group == 'on_site':
+        from src.utils.finalists_utils import get_top_finalists_by_scores
+        # Получаем топ-4 финалистов на основе оценок заочного этапа
+        finalist_teams = await get_top_finalists_by_scores(
+            session, active_event.id, stage_group="remote", count=4
         )
-    )
+        # Фильтруем только финалистов
+        finalist_ids = [team.id for team in finalist_teams]
+        teams_query = (
+            select(Team)
+            .options(
+                selectinload(Team.members)
+                .selectinload(TeamMember.user)
+                .selectinload(User.current_status),
+                selectinload(Team.members)
+                .selectinload(TeamMember.role),
+                selectinload(Team.members)
+                .selectinload(TeamMember.status)
+            )
+            .where(
+                Team.event_id == active_event.id,
+                Team.id.in_(finalist_ids)
+            )
+        )
+    else:
+        teams_query = (
+            select(Team)
+            .options(
+                selectinload(Team.members)
+                .selectinload(TeamMember.user)
+                .selectinload(User.current_status),
+                selectinload(Team.members)
+                .selectinload(TeamMember.role),
+                selectinload(Team.members)
+                .selectinload(TeamMember.status)
+            )
+            .where(Team.event_id == active_event.id)
+        )
     teams = await session.execute(teams_query)
     teams = teams.scalars().all()
 
+    # Получаем жюри, привязанные к текущему событию
     judges_query = (
         select(User)
-        .join(User2Roles)
-        .where(User2Roles.role_id == user_router_state.judge_role_id)
+        .join(EventJudge, User.id == EventJudge.judge_id)
+        .where(EventJudge.event_id == active_event.id)
     )
     judges = await session.execute(judges_query)
     judges = judges.scalars().all()
@@ -410,7 +693,15 @@ async def get_detailed_evaluations(
             selectinload(TeamEvaluation.judge),
             selectinload(TeamEvaluation.team)
         )
+        .where(TeamEvaluation.event_id == active_event.id)
     )
+    
+    # Фильтруем оценки по определенной группе этапа
+    if target_stage_group:
+        evaluations_query = await filter_evaluations_by_stage_group(
+            session, evaluations_query, target_stage_group, active_event.id
+        )
+    
     evaluations = await session.execute(evaluations_query)
     evaluations = evaluations.scalars().all()
 
@@ -422,7 +713,9 @@ async def get_detailed_evaluations(
 
     detailed_evaluations = []
     for team in teams:
-        if team.can_participate():
+        # Для заочного этапа показываем только активные команды (can_participate())
+        # Для очного этапа показываем всех финалистов, даже если они не проходят can_participate()
+        if target_stage_group == 'on_site' or team.can_participate():
             team_evaluations = []
             team_total_score = 0
             evaluations_count = 0
@@ -479,12 +772,79 @@ async def get_detailed_evaluations(
 
 @router.get("/public-results", response_model=List[TeamTotalScore])
 async def get_public_evaluation_results(
+        stage_group: Optional[str] = Query(None, description="Группа этапа: 'remote' (заочный) или 'on_site' (очный). Если не указано, используется текущий активный этап"),
         session: AsyncSession = Depends(get_session)
 ):
-    """Публичное получение итоговых результатов всех команд без авторизации"""
+    """Публичное получение итоговых результатов всех команд активного события, отфильтрованных по группе этапа"""
+    active_event = await get_active_event(session)
+    
+    # Определяем группу этапа для фильтрации
+    if stage_group:
+        if stage_group not in ['remote', 'on_site']:
+            raise HTTPException(
+                status_code=400,
+                detail="stage_group должен быть 'remote' или 'on_site'"
+            )
+        target_group = stage_group
+    else:
+        # Если группа не указана, используем текущий активный этап
+        target_group = await get_current_stage_group(session)
+        
+        # Если текущий этап - публикация результатов, определяем последнюю группу этапа с оценками
+        if not target_group:
+            # Проверяем, является ли текущий этап публикацией результатов
+            current_stage_query = select(Stage).where(
+                and_(
+                    Stage.is_active == True,
+                    Stage.event_id == active_event.id
+                )
+            )
+            current_stage_result = await session.execute(current_stage_query)
+            current_stage = current_stage_result.scalar_one_or_none()
+            
+            if current_stage and current_stage.type == StageType.RESULTS_PUBLICATION.value:
+                # Проверяем, есть ли оценки для очного этапа
+                on_site_stages = await get_stages_by_group(session, 'on_site', active_event.id)
+                on_site_stage_ids = [stage.id for stage in on_site_stages]
+                
+                if on_site_stage_ids:
+                    on_site_evaluations_query = select(TeamEvaluation).where(
+                        and_(
+                            TeamEvaluation.event_id == active_event.id,
+                            TeamEvaluation.stage_id.in_(on_site_stage_ids)
+                        )
+                    )
+                    on_site_evaluations_result = await session.execute(on_site_evaluations_query)
+                    on_site_evaluations = on_site_evaluations_result.scalars().all()
+                    
+                    # Если есть оценки для очного этапа, используем их
+                    if on_site_evaluations:
+                        target_group = 'on_site'
+                    else:
+                        # Иначе используем заочный этап
+                        target_group = 'remote'
+                else:
+                    # Если нет очных этапов, используем заочный
+                    target_group = 'remote'
+            else:
+                # Если нет активного этапа с группой, возвращаем пустой список
+                return []
+    
+    # Получаем этапы указанной группы
+    stages = await get_stages_by_group(session, target_group, active_event.id)
+    stage_ids = [stage.id for stage in stages]
+    
+    if not stage_ids:
+        # Если нет этапов этой группы, возвращаем пустой список
+        return []
+    
     latest_evaluations = (
         select(TeamEvaluation.id)
         .distinct(TeamEvaluation.judge_id, TeamEvaluation.team_id)
+        .where(
+            TeamEvaluation.event_id == active_event.id,
+            TeamEvaluation.stage_id.in_(stage_ids)
+        )
         .order_by(
             TeamEvaluation.judge_id,
             TeamEvaluation.team_id,
@@ -515,6 +875,7 @@ async def get_public_evaluation_results(
         TeamEvaluation,
         Team.id == TeamEvaluation.team_id
     ).where(
+        Team.event_id == active_event.id,
         TeamEvaluation.id.in_(latest_evaluations)
     ).group_by(
         Team.id,

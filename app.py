@@ -5,9 +5,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.db import engine
 from src.init_db import init_models
-from src.routers import auth_router, teams_router, users_router, files_router, stages_router
-from src.routers import auth_router, teams_router, users_router, files_router, evaluations_router
-from src.utils.background_tasks import scheduler
+from src.routers import auth_router, teams_router, users_router, files_router, stages_router, evaluations_router, events_router
+from src.utils.background_tasks import scheduler, check_and_schedule_auto_activate_stages, periodic_check_auto_activate_stages
 from src.utils.enum_utils import initialize_enum_data
 from src.utils.router_states import initialize_router_states
 
@@ -36,6 +35,7 @@ app.include_router(users_router)
 app.include_router(files_router)
 app.include_router(stages_router)
 app.include_router(evaluations_router)
+app.include_router(events_router)
 
 @app.on_event("startup")
 async def startup_event():
@@ -45,6 +45,17 @@ async def startup_event():
         await initialize_enum_data(session)
         await initialize_router_states(session)
     scheduler.start()
+    # Планируем автоматическую активацию этапов при старте
+    await check_and_schedule_auto_activate_stages()
+    # Добавляем периодическую проверку (каждую минуту)
+    from apscheduler.triggers.interval import IntervalTrigger
+    scheduler.add_job(
+        periodic_check_auto_activate_stages,
+        trigger=IntervalTrigger(minutes=1),
+        id='periodic_check_auto_activate_stages',
+        name='Periodic check for auto-activate stages',
+        replace_existing=True
+    )
 
 def custom_openapi():
     if app.openapi_schema:

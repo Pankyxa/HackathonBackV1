@@ -1,6 +1,7 @@
 import asyncio
 import os
 import uuid
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Query, HTTPException, Form, UploadFile, File, BackgroundTasks
 from pathlib import Path
@@ -15,13 +16,19 @@ from src.auth.jwt import get_current_user
 from src.db import get_session
 from src.models import User, TeamMember, File as FileModel, UserStatus, Team, Stage
 from src.models.enums import StageType
-from src.models.user import User2Roles, UserStatusHistory, UserStatusType
+from src.models.user import User2Roles, UserStatusHistory, UserStatusType, UserEventStatus
 from src.schemas.file import FileResponse
 from src.schemas.user import UserResponse, PaginatedUserResponse, ChangeUserStatusRequest, UpdateUserRolesRequest, \
     UpdateUserDocumentsRequest
-from src.utils.background_tasks import send_status_change_email, send_team_confirmation_email
+from src.utils.background_tasks import (
+    send_status_change_email,
+    send_team_confirmation_email_background,
+    check_and_close_registration,
+)
 from src.utils.router_states import team_router_state, user_router_state, file_router_state, stage_router_state
 from src.utils.stage_checker import check_stage
+from src.utils.event_utils import get_active_event
+from src.utils.user_status_utils import filter_users_by_status_for_event, get_user_status_for_event, get_user_status_id_for_event
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -38,13 +45,19 @@ async def search_users(
     Поиск пользователей по ФИО с пагинацией.
     """
     search_query = f"%{query}%"
+    
+    # Получаем активное событие для фильтрации
+    active_event = await get_active_event(session)
 
+    # Получаем команды текущего пользователя в активном событии
     current_user_team = (
         select(TeamMember.team_id)
+        .join(Team, TeamMember.team_id == Team.id)
         .where(
             and_(
                 TeamMember.user_id == current_user.id,
-                TeamMember.status_id == team_router_state.accepted_status_id
+                TeamMember.status_id == team_router_state.accepted_status_id,
+                Team.event_id == active_event.id
             )
         )
     )
@@ -69,16 +82,22 @@ async def search_users(
                         User2Roles.role_id == user_router_state.participant_role_id
                     )
                 ),
+                # Исключаем пользователей, которые уже состоят в командах активного события
                 not_(
                     exists(
                         select(1)
+                        .select_from(TeamMember)
+                        .join(Team, TeamMember.team_id == Team.id)
                         .where(
-                            TeamMember.user_id == User.id,
-                            TeamMember.status_id == team_router_state.accepted_status_id,
-                            TeamMember.team_id == TeamMember.team_id,
+                            and_(
+                                TeamMember.user_id == User.id,
+                                TeamMember.status_id == team_router_state.accepted_status_id,
+                                Team.event_id == active_event.id
+                            )
                         )
                     )
                 ),
+                # Исключаем пользователей, которые уже в командах текущего пользователя в активном событии
                 not_(
                     exists(
                         select(1)
@@ -120,13 +139,19 @@ async def search_mentors(
     - Может возвращать менторов, которые уже состоят в других командах
     """
     search_query = f"%{query}%"
+    
+    # Получаем активное событие для фильтрации
+    active_event = await get_active_event(session)
 
+    # Получаем команды текущего пользователя в активном событии
     current_user_team = (
         select(TeamMember.team_id)
+        .join(Team, TeamMember.team_id == Team.id)
         .where(
             and_(
                 TeamMember.user_id == current_user.id,
-                TeamMember.status_id == team_router_state.accepted_status_id
+                TeamMember.status_id == team_router_state.accepted_status_id,
+                Team.event_id == active_event.id
             )
         )
     )
@@ -152,6 +177,7 @@ async def search_mentors(
                     )
                 )
             ),
+            # Исключаем менторов, которые уже в командах текущего пользователя в активном событии
             not_(
                 exists(
                     select(1)
@@ -256,17 +282,43 @@ async def get_users(
                 status_ids.append(user_router_state.need_update_status_id)
 
         if status_ids:
-            query = query.where(User.current_status_id.in_(status_ids))
+            # Фильтруем по статусу для активного события
+            query = await filter_users_by_status_for_event(
+                session,
+                query,
+                status_ids
+            )
 
     count_query = select(func.count()).select_from(query.subquery())
     total = await session.scalar(count_query)
 
-    query = query.order_by(User.full_name) \
+    query = query.options(
+        selectinload(User.participant_info),
+        selectinload(User.mentor_info),
+        selectinload(User.user2roles).selectinload(User2Roles.role),
+        selectinload(User.current_status),  # Для обратной совместимости
+        selectinload(User.event_statuses).selectinload(UserEventStatus.status),
+        selectinload(User.event_statuses).selectinload(UserEventStatus.event),
+        selectinload(User.status_history).selectinload(UserStatusHistory.status),
+    ).order_by(User.full_name) \
         .limit(limit) \
         .offset(offset)
 
     result = await session.execute(query)
     users = result.scalars().all()
+    
+    # Обновляем current_status для каждого пользователя на статус для активного события
+    try:
+        active_event = await get_active_event(session)
+        for user in users:
+            user_status = await get_user_status_for_event(session, user.id, active_event.id)
+            if user_status:
+                # Временно заменяем current_status на статус для события
+                # Это нужно для корректного отображения на фронтенде
+                user.current_status = user_status
+    except Exception:
+        # Если активного события нет, оставляем глобальный статус
+        pass
 
     return {
         "users": users,
@@ -284,13 +336,10 @@ async def get_pending_users(
         session: AsyncSession = Depends(get_session)
 ):
     """
-    Получение списка пользователей со статусом PENDING.
+    Получение списка пользователей со статусом PENDING для активного события.
     Поддерживает пагинацию и опциональный поиск по ФИО или email.
     """
-    base_query = (
-        select(User)
-        .where(User.current_status_id == user_router_state.pending_status_id)
-    )
+    base_query = select(User)
 
     if search:
         search_query = f"%{search}%"
@@ -301,6 +350,13 @@ async def get_pending_users(
             )
         )
 
+    # Фильтруем по статусу для активного события
+    base_query = await filter_users_by_status_for_event(
+        session,
+        base_query,
+        [user_router_state.pending_status_id]
+    )
+
     count_query = select(func.count()).select_from(base_query.subquery())
     total = await session.scalar(count_query)
 
@@ -310,7 +366,9 @@ async def get_pending_users(
             selectinload(User.participant_info),
             selectinload(User.mentor_info),
             selectinload(User.user2roles).selectinload(User2Roles.role),
-            selectinload(User.current_status),
+            selectinload(User.current_status),  # Для обратной совместимости
+            selectinload(User.event_statuses).selectinload(UserEventStatus.status),
+            selectinload(User.event_statuses).selectinload(UserEventStatus.event),
             selectinload(User.status_history).selectinload(UserStatusHistory.status),
         )
         .order_by(User.registered_at.desc())
@@ -320,6 +378,19 @@ async def get_pending_users(
 
     result = await session.execute(query)
     users = result.scalars().all()
+    
+    # Обновляем current_status для каждого пользователя на статус для активного события
+    try:
+        active_event = await get_active_event(session)
+        for user in users:
+            user_status = await get_user_status_for_event(session, user.id, active_event.id)
+            if user_status:
+                # Временно заменяем current_status на статус для события
+                # Это нужно для корректного отображения на фронтенде
+                user.current_status = user_status
+    except Exception:
+        # Если активного события нет, оставляем глобальный статус
+        pass
 
     return {
         "users": users,
@@ -393,7 +464,9 @@ async def change_user_status(
         background_tasks: BackgroundTasks = BackgroundTasks(),
         session: AsyncSession = Depends(get_session)
 ):
-    """Изменение статуса пользователя (доступно только для организаторов)"""
+    """Изменение статуса пользователя (доступно только для организаторов, только на этапе Регистрация)"""
+    # Проверка пользователей доступна только на этапе Регистрация
+    # На этапе "Регистрация закрыта" проверка недоступна, так как регистрация уже закрыта
     await check_stage(session, StageType.REGISTRATION)
 
     current_user_query = (
@@ -434,6 +507,15 @@ async def change_user_status(
             detail="Пользователь не найден"
         )
 
+    # Проверяем, требуется ли проверка документов для этого пользователя
+    # Для пользователей без ролей participant/mentor нельзя изменять статус
+    from src.utils.user_status_utils import requires_document_check
+    if not await requires_document_check(session, user):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Для пользователей без ролей 'Участник' или 'Наставник' изменение статуса недоступно. Их статус всегда подтвержден."
+        )
+
     status_id = None
     if status_request.status == UserStatus.PENDING:
         status_id = user_router_state.pending_status_id
@@ -448,14 +530,43 @@ async def change_user_status(
             detail="Неверный статус"
         )
 
-    old_status_id = user.current_status_id
+    # Получаем активное событие
+    active_event = await get_active_event(session)
+    
+    # Получаем или создаем UserEventStatus для активного события
+    user_event_status_query = select(UserEventStatus).where(
+        UserEventStatus.user_id == user.id,
+        UserEventStatus.event_id == active_event.id
+    )
+    user_event_status_result = await session.execute(user_event_status_query)
+    user_event_status = user_event_status_result.scalar_one_or_none()
+    
+    old_status_id = None
+    if user_event_status:
+        old_status_id = user_event_status.status_id
+    else:
+        # Если статуса для события нет, создаем его
+        user_event_status = UserEventStatus(
+            id=uuid.uuid4(),
+            user_id=user.id,
+            event_id=active_event.id,
+            status_id=status_id
+        )
+        session.add(user_event_status)
+        old_status_id = user.current_status_id  # Используем глобальный статус как старый
 
     new_status_history = UserStatusHistory(
         user_id=user.id,
         status_id=status_id,
-        comment=status_request.comment
+        comment=status_request.comment or f"Изменение статуса для события {active_event.name}"
     )
     session.add(new_status_history)
+    
+    # Обновляем статус для события
+    user_event_status.status_id = status_id
+    user_event_status.updated_at = datetime.now(timezone.utc)
+    
+    # Также обновляем глобальный статус для обратной совместимости
     user.current_status_id = status_id
 
     await session.flush()
@@ -467,8 +578,12 @@ async def change_user_status(
         if (old_status_id != status_id and
                 status_id == user_router_state.approved_status_id):
 
+            # Получаем активное событие для фильтрации команд
+            active_event = await get_active_event(new_session)
+
             teams_query = (
                 select(Team)
+                .where(Team.event_id == active_event.id)  # Фильтруем только команды активного события
                 .options(
                     selectinload(Team.members)
                     .selectinload(TeamMember.user)
@@ -487,32 +602,34 @@ async def change_user_status(
                 for member in team.members:
                     await new_session.refresh(member)
                     await new_session.refresh(member.user)
+            
+            # Обновляем статусы пользователей на статусы для активного события
+            from src.utils.user_status_utils import update_team_members_statuses_for_event
+            for team in teams:
+                await update_team_members_statuses_for_event(new_session, team, active_event.id)
 
+            # Считаем только команды со статусом "active"
+            # get_status() уже учитывает только участников со статусом ACCEPTED через get_active_members()
             active_teams = [team for team in teams if team.get_status() == "active"]
             active_teams_count = len(active_teams)
 
+            # Если достигнуто 20 активных команд, запускаем закрытие регистрации и рассылку в фоне,
+            # чтобы не блокировать ответ фронтенду
             if active_teams_count >= 20:
-                current_stage_query = select(Stage).where(Stage.is_active == True)
-                current_stage = await new_session.execute(current_stage_query)
-                current_stage = current_stage.scalar_one_or_none()
-
-                if current_stage and current_stage.type == StageType.REGISTRATION.value:
-                    registration_closed_stage_query = (
-                        select(Stage)
-                        .where(Stage.type == StageType.REGISTRATION_CLOSED.value)
-                    )
-                    registration_closed_stage = await new_session.execute(registration_closed_stage_query)
-                    registration_closed_stage = registration_closed_stage.scalar_one_or_none()
-
-                    if registration_closed_stage:
-                        current_stage.is_active = False
-                        registration_closed_stage.is_active = True
-                        await stage_router_state.initialize(new_session)
-
-                        background_tasks.add_task(send_team_confirmation_email, new_session)
-                        await new_session.commit()
+                background_tasks.add_task(check_and_close_registration)
+                background_tasks.add_task(send_team_confirmation_email_background)
 
     await session.refresh(user)
+    
+    # Обновляем current_status на статус для активного события перед возвратом
+    try:
+        user_status = await get_user_status_for_event(session, user.id, active_event.id)
+        if user_status:
+            user.current_status = user_status
+    except Exception:
+        # Если активного события нет, оставляем глобальный статус
+        pass
+    
     return user
 
 
@@ -588,6 +705,16 @@ async def update_user_roles(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Пользователь не найден"
         )
+
+    # Обновляем current_status на статус для активного события
+    try:
+        active_event = await get_active_event(session)
+        user_status = await get_user_status_for_event(session, updated_user.id, active_event.id)
+        if user_status:
+            updated_user.current_status = user_status
+    except Exception:
+        # Если активного события нет, оставляем глобальный статус
+        pass
 
     return updated_user
 
@@ -790,14 +917,15 @@ async def update_user_documents(
         result = await session.execute(user_query)
         user = result.scalar_one()
 
-        if user.current_status_id == user_router_state.need_update_status_id:
-            new_status_history = UserStatusHistory(
-                user_id=user.id,
-                status_id=user_router_state.pending_status_id,
-                comment="Документы обновлены пользователем"
-            )
-            session.add(new_status_history)
-            user.current_status_id = user_router_state.pending_status_id
+        # Не меняем статус автоматически - пользователь должен отправить на проверку вручную
+        # if user.current_status_id == user_router_state.need_update_status_id:
+        #     new_status_history = UserStatusHistory(
+        #         user_id=user.id,
+        #         status_id=user_router_state.pending_status_id,
+        #         comment="Документы обновлены пользователем"
+        #     )
+        #     session.add(new_status_history)
+        #     user.current_status_id = user_router_state.pending_status_id
 
         await session.commit()
 
@@ -816,6 +944,16 @@ async def update_user_documents(
         result = await session.execute(refresh_query)
         updated_user = result.scalar_one()
 
+        # Обновляем current_status на статус для активного события
+        try:
+            active_event = await get_active_event(session)
+            user_status = await get_user_status_for_event(session, updated_user.id, active_event.id)
+            if user_status:
+                updated_user.current_status = user_status
+        except Exception:
+            # Если активного события нет, оставляем глобальный статус
+            pass
+
         return updated_user
 
     except Exception as e:
@@ -826,3 +964,102 @@ async def update_user_documents(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Ошибка при обновлении документов пользователя"
         )
+
+
+@router.post("/me/submit-for-review", response_model=UserResponse)
+async def submit_for_review(
+        current_user: User = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session)
+):
+    """
+    Отправка данных пользователя на проверку.
+    Меняет статус с need_update на pending, если текущий статус need_update.
+    """
+    await check_stage(session, StageType.REGISTRATION)
+
+    user_query = (
+        select(User)
+        .options(
+            selectinload(User.participant_info),
+            selectinload(User.mentor_info),
+            selectinload(User.user2roles).selectinload(User2Roles.role),
+            selectinload(User.current_status),
+            selectinload(User.status_history).selectinload(UserStatusHistory.status),
+        )
+        .where(User.id == current_user.id)
+    )
+
+    result = await session.execute(user_query)
+    user = result.scalar_one()
+
+    # Получаем активное событие
+    active_event = await get_active_event(session)
+    
+    # Получаем статус для активного события
+    user_status_id = await get_user_status_id_for_event(session, user.id, active_event.id)
+    
+    # Проверяем статус для активного события (или глобальный, если статуса для события нет)
+    if user_status_id != user_router_state.need_update_status_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Отправка на проверку доступна только для пользователей со статусом 'Требуется обновление'"
+        )
+
+    # Получаем или создаем UserEventStatus для активного события
+    user_event_status_query = select(UserEventStatus).where(
+        UserEventStatus.user_id == user.id,
+        UserEventStatus.event_id == active_event.id
+    )
+    user_event_status_result = await session.execute(user_event_status_query)
+    user_event_status = user_event_status_result.scalar_one_or_none()
+    
+    if not user_event_status:
+        # Создаем новый статус для события
+        user_event_status = UserEventStatus(
+            id=uuid.uuid4(),
+            user_id=user.id,
+            event_id=active_event.id,
+            status_id=user_router_state.pending_status_id
+        )
+        session.add(user_event_status)
+    else:
+        # Обновляем статус для события
+        user_event_status.status_id = user_router_state.pending_status_id
+        user_event_status.updated_at = datetime.now(timezone.utc)
+
+    new_status_history = UserStatusHistory(
+        user_id=user.id,
+        status_id=user_router_state.pending_status_id,
+        comment="Пользователь отправил обновленные данные на проверку"
+    )
+    session.add(new_status_history)
+    user.current_status_id = user_router_state.pending_status_id
+
+    await session.commit()
+
+    refresh_query = (
+        select(User)
+        .options(
+            selectinload(User.participant_info),
+            selectinload(User.mentor_info),
+            selectinload(User.user2roles).selectinload(User2Roles.role),
+            selectinload(User.current_status),
+            selectinload(User.status_history).selectinload(UserStatusHistory.status),
+        )
+        .where(User.id == current_user.id)
+    )
+
+    result = await session.execute(refresh_query)
+    updated_user = result.scalar_one()
+
+    # Обновляем current_status на статус для активного события
+    try:
+        active_event = await get_active_event(session)
+        user_status = await get_user_status_for_event(session, updated_user.id, active_event.id)
+        if user_status:
+            updated_user.current_status = user_status
+    except Exception:
+        # Если активного события нет, оставляем глобальный статус
+        pass
+
+    return updated_user

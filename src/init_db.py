@@ -186,30 +186,23 @@ async def init_models(engine: AsyncEngine):
             },
             {
                 "id": uuid.uuid4(),
-                "name": "Проверка решений",
-                "type": StageType.SOLUTION_REVIEW.value,
-                "order": 5,
-                "is_active": False
-            },
-            {
-                "id": uuid.uuid4(),
                 "name": "Онлайн защита",
                 "type": StageType.ONLINE_DEFENSE.value,
-                "order": 6,
+                "order": 5,
                 "is_active": False
             },
             {
                 "id": uuid.uuid4(),
                 "name": "Публикация результатов",
                 "type": StageType.RESULTS_PUBLICATION.value,
-                "order": 7,
+                "order": 6,
                 "is_active": False
             },
             {
                 "id": uuid.uuid4(),
                 "name": "Церемония награждения",
                 "type": StageType.AWARD_CEREMONY.value,
-                "order": 8,
+                "order": 7,
                 "is_active": False
             }
         ]

@@ -42,6 +42,7 @@ class TeamResponse(BaseModel):
     logo_file_id: UUID | None
     status_details: TeamStatusDetails
     solution_link: Optional[str] = None
+    is_finalist: bool = False
 
     @property
     def get_status_details(self) -> TeamStatusDetails:

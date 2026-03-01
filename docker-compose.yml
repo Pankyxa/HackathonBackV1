@@ -12,10 +12,10 @@ services:
       - .:/app
     networks:
       - backend-network
-      - hackathon-network  # добавляем общую сеть
+      - hackathon-network
 
   database:
-    image: postgres:latest
+    image: postgres:16  # <--- ИЗМЕНЕНО: фиксируем версию вместо latest
     env_file:
       - .env
     environment:
@@ -32,9 +32,9 @@ services:
 networks:
   backend-network:
     driver: bridge
-  hackathon-network:  # определяем общую сеть
+  hackathon-network:
     driver: bridge
-    name: hackathon-network  # фиксированное имя для общей сети
+    name: hackathon-network
 
 volumes:
   db_data:

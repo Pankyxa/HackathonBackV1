@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from sqlalchemy import Column, String, DateTime, ForeignKey, Boolean
+from sqlalchemy import Column, String, DateTime, ForeignKey, Boolean, UniqueConstraint
 from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.postgresql import UUID
 import uuid
@@ -28,6 +28,7 @@ class User(Base):
     mentor_info = relationship("MentorInfo", back_populates="user", uselist=False)
     current_status = relationship("UserStatusType")
     status_history = relationship("UserStatusHistory", back_populates="user", order_by="UserStatusHistory.created_at.desc()")
+    event_statuses = relationship("UserEventStatus", back_populates="user", cascade="all, delete-orphan")
 
     @property
     def roles(self):
@@ -114,4 +115,45 @@ class EmailVerificationToken(Base):
     @property
     def is_expired(self):
         return datetime.now(timezone.utc) > self.expires_at
+
+
+class PasswordResetToken(Base):
+    """Модель для хранения токенов сброса пароля"""
+    __tablename__ = 'password_reset_tokens'
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey('users.id'), nullable=False)
+    token = Column(String(255), nullable=False, unique=True)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    used = Column(Boolean, default=False, nullable=False)
+
+    # Relationships
+    user = relationship("User")
+
+    @property
+    def is_expired(self):
+        return datetime.now(timezone.utc) > self.expires_at
+
+
+class UserEventStatus(Base):
+    """Статус пользователя для конкретного события"""
+    __tablename__ = 'user_event_statuses'
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
+    event_id = Column(UUID(as_uuid=True), ForeignKey('events.id', ondelete='CASCADE'), nullable=False)
+    status_id = Column(UUID(as_uuid=True), ForeignKey('user_status_types.id'), nullable=False)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    # Relationships
+    user = relationship("User", back_populates="event_statuses")
+    event = relationship("Event", back_populates="user_statuses")
+    status = relationship("UserStatusType")
+
+    # Уникальный constraint: один пользователь может иметь только один статус для одного события
+    __table_args__ = (
+        UniqueConstraint('user_id', 'event_id', name='uq_user_event_status'),
+    )
 
