@@ -15,6 +15,7 @@ from typing import List, Optional
 import json
 from uuid import UUID
 import os
+import glob
 
 from sqlalchemy.orm import joinedload, selectinload
 
@@ -1138,23 +1139,23 @@ async def get_team_logo(
         team_id: uuid.UUID,
         session: AsyncSession = Depends(get_session)
 ):
-    """Получить логотип команды"""
-    active_event = await get_active_event(session)
+    """Получить логотип команды (доступен для команд из любых событий)"""
+    import logging
+    logger = logging.getLogger(__name__)
     
-    query = select(Team).where(
-        Team.id == team_id,
-        Team.event_id == active_event.id
-    )
+    query = select(Team).where(Team.id == team_id)
     team = await session.execute(query)
     team = team.scalar_one_or_none()
 
     if not team:
+        logger.warning(f"Команда {team_id} не найдена в БД")
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Команда не найдена или не принадлежит активному событию"
+            detail="Команда не найдена"
         )
 
     if not team.logo_file_id:
+        logger.warning(f"У команды {team_id} нет logo_file_id")
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="У команды нет логотипа"
@@ -1164,14 +1165,73 @@ async def get_team_logo(
     logo_file = await session.execute(logo_query)
     logo_file = logo_file.scalar_one_or_none()
 
-    if not logo_file or not os.path.exists(logo_file.file_path):
+    if not logo_file:
+        logger.warning(f"Файл с ID {team.logo_file_id} не найден в таблице files для команды {team_id}")
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Файл логотипа не найден"
+            detail="Запись о файле логотипа не найдена в БД"
+        )
+    
+    # Проверяем существование файла по указанному пути
+    from src.settings import BASE_DIR
+    
+    file_path = logo_file.file_path
+    
+    # Пробуем найти файл: сначала по указанному пути, потом абсолютный
+    if os.path.exists(file_path):
+        # Файл найден по указанному пути (относительному или абсолютному)
+        logger.debug(f"Файл найден по пути: {file_path} для команды {team_id}")
+    elif not os.path.isabs(file_path):
+        # Путь относительный, пробуем сделать абсолютным
+        abs_path = BASE_DIR / file_path
+        if os.path.exists(abs_path):
+            file_path = str(abs_path)
+            logger.info(f"Найден файл по абсолютному пути: {file_path} для команды {team_id}")
+        else:
+            logger.warning(f"Файл не существует по указанному пути: {logo_file.file_path} (абсолютный: {abs_path}) для команды {team_id}")
+            
+            # Fallback: пытаемся найти файл в директории команды
+            team_upload_dir = f"uploads/teams/{team_id}"
+            team_upload_dir_abs = BASE_DIR / team_upload_dir
+            
+            # Пробуем относительный путь
+            if os.path.exists(team_upload_dir):
+                search_dir = team_upload_dir
+            # Пробуем абсолютный путь
+            elif os.path.exists(team_upload_dir_abs):
+                search_dir = str(team_upload_dir_abs)
+            else:
+                search_dir = None
+            
+            if search_dir:
+                # Ищем все файлы изображений в директории команды
+                image_files = glob.glob(f"{search_dir}/*.png") + glob.glob(f"{search_dir}/*.jpg") + \
+                             glob.glob(f"{search_dir}/*.jpeg") + glob.glob(f"{search_dir}/*.gif")
+                
+                if image_files:
+                    # Берем первый найденный файл изображения
+                    fallback_path = image_files[0]
+                    logger.info(f"Используем fallback файл: {fallback_path} для команды {team_id}")
+                    return FileResponse(
+                        fallback_path,
+                        filename=os.path.basename(fallback_path),
+                        media_type="image/png" if fallback_path.endswith('.png') else "image/jpeg"
+                    )
+            
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Файл логотипа не найден на диске: {logo_file.file_path}"
+            )
+    else:
+        # Путь абсолютный, но файл не найден
+        logger.warning(f"Файл не существует по указанному абсолютному пути: {file_path} для команды {team_id}")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Файл логотипа не найден на диске: {file_path}"
         )
 
     return FileResponse(
-        logo_file.file_path,
+        file_path,
         filename=logo_file.filename,
         media_type=f"image/{str(logo_file.file_format).lower()}"
     )
