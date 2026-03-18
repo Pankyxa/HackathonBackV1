@@ -228,7 +228,7 @@ async def update_team_members_statuses_for_event(
     if not hasattr(team, "members") or not team.members:
         return
 
-    async with session.no_autoflush:
+    with session.no_autoflush:
         for member in team.members:
             if member.user:
                 user_status_id = await get_user_status_id_for_event(
