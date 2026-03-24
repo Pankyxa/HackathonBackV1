@@ -23,12 +23,14 @@ from src.utils.router_states import team_router_state, user_router_state
 
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
 )
 
 
-async def send_email_async(*, to_email: str, subject: str, body: str, is_html: bool = True) -> bool:
+async def send_email_async(
+    *, to_email: str, subject: str, body: str, is_html: bool = True
+) -> bool:
     """
     Обертка над email_sender.send_email, выполняющая отправку письма в отдельном потоке.
     Это позволяет не блокировать event‑loop FastAPI при синхронной работе SMTP‑клиента.
@@ -51,36 +53,41 @@ async def send_team_confirmation_email(session: AsyncSession):
     Отправляет уведомления о подтверждении участия командам активного события
     """
     global _team_confirmation_email_running
-    
+
     # Проверяем, не выполняется ли уже рассылка
     if _team_confirmation_email_running:
-        logging.warning("Рассылка уведомлений о подтверждении участия уже выполняется, пропускаем")
+        logging.warning(
+            "Рассылка уведомлений о подтверждении участия уже выполняется, пропускаем"
+        )
         return
-    
+
     from src.utils.event_utils import get_active_event
-    
+
     try:
         active_event = await get_active_event(session)
     except Exception:
-        logging.warning("Активное событие не найдено, пропускаем рассылку подтверждений")
+        logging.warning(
+            "Активное событие не найдено, пропускаем рассылку подтверждений"
+        )
         return
-    
+
     # Проверяем текущий этап - рассылка должна выполняться только при переходе с REGISTRATION на REGISTRATION_CLOSED
     # Если этап уже не REGISTRATION, значит рассылка уже была выполнена
     current_stage_query = select(Stage).where(
-        Stage.is_active == True,
-        Stage.event_id == active_event.id
+        Stage.is_active == True, Stage.event_id == active_event.id
     )
     current_stage_result = await session.execute(current_stage_query)
     current_stage = current_stage_result.scalar_one_or_none()
-    
+
     if current_stage and current_stage.type != StageType.REGISTRATION.value:
-        logging.info(f"Текущий этап: {current_stage.type}, рассылка о подтверждении участия уже была выполнена, пропускаем")
+        logging.info(
+            f"Текущий этап: {current_stage.type}, рассылка о подтверждении участия уже была выполнена, пропускаем"
+        )
         return
-    
+
     # Устанавливаем флаг выполнения
     _team_confirmation_email_running = True
-    
+
     try:
         teams_query = (
             select(Team)
@@ -89,10 +96,8 @@ async def send_team_confirmation_email(session: AsyncSession):
                 selectinload(Team.members)
                 .selectinload(TeamMember.user)
                 .selectinload(User.current_status),
-                selectinload(Team.members)
-                .selectinload(TeamMember.role),
-                selectinload(Team.members)
-                .selectinload(TeamMember.status)
+                selectinload(Team.members).selectinload(TeamMember.role),
+                selectinload(Team.members).selectinload(TeamMember.status),
             )
         )
         result = await session.execute(teams_query)
@@ -104,12 +109,15 @@ async def send_team_confirmation_email(session: AsyncSession):
         failed_sends = 0
         processed_user_ids = set()  # чтобы один пользователь не получил несколько писем
 
-        logging.info(f"Начало рассылки уведомлений о подтверждении участия. Всего команд: {total_teams}")
+        logging.info(
+            f"Начало рассылки уведомлений о подтверждении участия. Всего команд: {total_teams}"
+        )
         start_time = datetime.now()
 
         for i, team in enumerate(active_teams, 1):
             team_members = [
-                member.user for member in team.members
+                member.user
+                for member in team.members
                 if member.status_id == team_router_state.accepted_status_id
             ]
 
@@ -143,12 +151,16 @@ async def send_team_confirmation_email(session: AsyncSession):
                                                 <table border="0" cellpadding="0" cellspacing="0" width="100%">
                                                     <tr>
                                                         <td align="center" style="padding: 0 0 20px 0;">
-                                                            <p style="margin: 0;">Здравствуйте, {member.full_name}!</p>
+                                                            <p style="margin: 0;">Здравствуйте, {
+                    member.full_name
+                }!</p>
                                                         </td>
                                                     </tr>
                                                     <tr>
                                                         <td align="center" style="padding: 0 0 20px 0;">
-                                                            <p style="margin: 0;">Ваша команда "{team.team_name}" успешно зарегистрирована для участия в хакатоне.</p>
+                                                            <p style="margin: 0;">Ваша команда "{
+                    team.team_name
+                }" успешно зарегистрирована для участия в хакатоне.</p>
                                                         </td>
                                                     </tr>
                                                     <tr>
@@ -156,11 +168,13 @@ async def send_team_confirmation_email(session: AsyncSession):
                                                             <p style="margin: 0;">Состав команды:</p>
                                                             <ul style="list-style: none; padding: 0;">
                                                                 {
-                ''.join([
-                    f'<li style="margin: 5px 0;">{tm.user.full_name} ({tm.role.name})</li>'
-                    for tm in team.members
-                    if tm.status_id == team_router_state.accepted_status_id
-                ])
+                    "".join(
+                        [
+                            f'<li style="margin: 5px 0;">{tm.user.full_name} ({tm.role.name})</li>'
+                            for tm in team.members
+                            if tm.status_id == team_router_state.accepted_status_id
+                        ]
+                    )
                 }
                                                             </ul>
                                                         </td>
@@ -193,15 +207,18 @@ async def send_team_confirmation_email(session: AsyncSession):
                     if success:
                         successful_sends += 1
                         logging.info(
-                            f"[Команда {i}/{total_teams}] Отправлено уведомление участнику {member.full_name} ({member.email})")
+                            f"[Команда {i}/{total_teams}] Отправлено уведомление участнику {member.full_name} ({member.email})"
+                        )
                     else:
                         failed_sends += 1
                         logging.error(
-                            f"[Команда {i}/{total_teams}] Ошибка отправки участнику {member.full_name} ({member.email})")
+                            f"[Команда {i}/{total_teams}] Ошибка отправки участнику {member.full_name} ({member.email})"
+                        )
                 except Exception as e:
                     failed_sends += 1
                     logging.error(
-                        f"[Команда {i}/{total_teams}] Исключение при отправке участнику {member.full_name} ({member.email}): {str(e)}")
+                        f"[Команда {i}/{total_teams}] Исключение при отправке участнику {member.full_name} ({member.email}): {str(e)}"
+                    )
 
                 # Небольшая пауза, чтобы не DDOS-ить SMTP, но не блокировать сервер надолго
                 await asyncio.sleep(0.1)
@@ -217,7 +234,9 @@ async def send_team_confirmation_email(session: AsyncSession):
 Ошибок отправки: {failed_sends}
     """)
     except Exception as e:
-        logging.error(f"Ошибка при выполнении рассылки уведомлений о подтверждении участия: {str(e)}")
+        logging.error(
+            f"Ошибка при выполнении рассылки уведомлений о подтверждении участия: {str(e)}"
+        )
     finally:
         # Сбрасываем флаг выполнения в любом случае
         _team_confirmation_email_running = False
@@ -233,6 +252,7 @@ async def send_team_confirmation_email_background():
         await send_team_confirmation_email(session)
     finally:
         await session.close()
+
 
 async def send_team_invitation_email(user: User, team: Team):
     """Отправляет email с приглашением в команду"""
@@ -400,7 +420,7 @@ async def send_status_change_email(user: User, new_status: str, comment: str = N
         "need_update": "требует обновления",
         "PENDING": "на рассмотрении",
         "APPROVED": "одобрен",
-        "NEED_UPDATE": "требует обновления"
+        "NEED_UPDATE": "требует обновления",
     }
 
     status_key = new_status.lower()
@@ -493,10 +513,12 @@ async def send_hackathon_consultation_notification(session: AsyncSession):
         .distinct()
         .join(User2Roles)
         .where(
-            User2Roles.role_id.in_([
-                user_router_state.participant_role_id,
-                user_router_state.mentor_role_id
-            ])
+            User2Roles.role_id.in_(
+                [
+                    user_router_state.participant_role_id,
+                    user_router_state.mentor_role_id,
+                ]
+            )
         )
     )
 
@@ -507,7 +529,9 @@ async def send_hackathon_consultation_notification(session: AsyncSession):
     successful_sends = 0
     failed_sends = 0
 
-    logging.info(f"Начало рассылки уведомлений об открытии хакатона. Всего получателей: {total_users}")
+    logging.info(
+        f"Начало рассылки уведомлений об открытии хакатона. Всего получателей: {total_users}"
+    )
     start_time = datetime.now()
 
     for i, user in enumerate(users, 1):
@@ -596,13 +620,19 @@ async def send_hackathon_consultation_notification(session: AsyncSession):
             )
             if success:
                 successful_sends += 1
-                logging.info(f"[{i}/{total_users}] Отправлено уведомление на email: {user.email}")
+                logging.info(
+                    f"[{i}/{total_users}] Отправлено уведомление на email: {user.email}"
+                )
             else:
                 failed_sends += 1
-                logging.error(f"[{i}/{total_users}] Ошибка отправки на email: {user.email}")
+                logging.error(
+                    f"[{i}/{total_users}] Ошибка отправки на email: {user.email}"
+                )
         except Exception as e:
             failed_sends += 1
-            logging.error(f"[{i}/{total_users}] Исключение при отправке на email {user.email}: {str(e)}")
+            logging.error(
+                f"[{i}/{total_users}] Исключение при отправке на email {user.email}: {str(e)}"
+            )
 
         if i < total_users:
             await asyncio.sleep(0.1)
@@ -705,12 +735,18 @@ async def send_single_hackathon_consultation_notification(user: User):
             is_html=True,
         )
         if success:
-            logging.info(f"Отправлено уведомление о консультации на email: {user.email}")
+            logging.info(
+                f"Отправлено уведомление о консультации на email: {user.email}"
+            )
         else:
-            logging.error(f"Ошибка отправки уведомления о консультации на email: {user.email}")
+            logging.error(
+                f"Ошибка отправки уведомления о консультации на email: {user.email}"
+            )
         return success
     except Exception as e:
-        logging.error(f"Исключение при отправке уведомления о консультации на email {user.email}: {str(e)}")
+        logging.error(
+            f"Исключение при отправке уведомления о консультации на email {user.email}: {str(e)}"
+        )
         return False
 
 
@@ -721,10 +757,10 @@ async def send_judge_briefing_notification(session: AsyncSession):
     """
     from src.models.event import EventJudge
     from src.utils.event_utils import get_active_event
-    
+
     # Получаем активное событие
     active_event = await get_active_event(session)
-    
+
     # Получаем жюри, привязанные к активному событию
     users_query = (
         select(User)
@@ -740,7 +776,9 @@ async def send_judge_briefing_notification(session: AsyncSession):
     successful_sends = 0
     failed_sends = 0
 
-    logging.info(f"Начало рассылки уведомлений о брифинге. Всего получателей: {total_users}")
+    logging.info(
+        f"Начало рассылки уведомлений о брифинге. Всего получателей: {total_users}"
+    )
     start_time = datetime.now()
 
     for i, user in enumerate(users, 1):
@@ -827,13 +865,19 @@ async def send_judge_briefing_notification(session: AsyncSession):
             )
             if success:
                 successful_sends += 1
-                logging.info(f"[{i}/{total_users}] Отправлено уведомление на email: {user.email}")
+                logging.info(
+                    f"[{i}/{total_users}] Отправлено уведомление на email: {user.email}"
+                )
             else:
                 failed_sends += 1
-                logging.error(f"[{i}/{total_users}] Ошибка отправки на email: {user.email}")
+                logging.error(
+                    f"[{i}/{total_users}] Ошибка отправки на email: {user.email}"
+                )
         except Exception as e:
             failed_sends += 1
-            logging.error(f"[{i}/{total_users}] Исключение при отправке на email {user.email}: {str(e)}")
+            logging.error(
+                f"[{i}/{total_users}] Исключение при отправке на email {user.email}: {str(e)}"
+            )
 
         if i < total_users:
             await asyncio.sleep(0.1)
@@ -938,10 +982,14 @@ async def send_single_judge_briefing_notification(user: User):
         if success:
             logging.info(f"Отправлено уведомление о брифинге на email: {user.email}")
         else:
-            logging.error(f"Ошибка отправки уведомления о брифинге на email: {user.email}")
+            logging.error(
+                f"Ошибка отправки уведомления о брифинге на email: {user.email}"
+            )
         return success
     except Exception as e:
-        logging.error(f"Исключение при отправке уведомления о брифинге на email {user.email}: {str(e)}")
+        logging.error(
+            f"Исключение при отправке уведомления о брифинге на email {user.email}: {str(e)}"
+        )
         return False
 
 
@@ -951,24 +999,24 @@ async def send_registration_closed_notification(session: AsyncSession):
     всем активным командам активного события
     """
     from src.utils.event_utils import get_active_event
-    
+
     try:
         active_event = await get_active_event(session)
     except Exception:
-        logging.warning("Активное событие не найдено, пропускаем рассылку о закрытии регистрации")
+        logging.warning(
+            "Активное событие не найдено, пропускаем рассылку о закрытии регистрации"
+        )
         return
-    
+
     teams_query = (
         select(Team)
         .where(Team.event_id == active_event.id)
         .options(
-            joinedload(Team.members)
-            .joinedload(TeamMember.status),
-            joinedload(Team.members)
-            .joinedload(TeamMember.role),
+            joinedload(Team.members).joinedload(TeamMember.status),
+            joinedload(Team.members).joinedload(TeamMember.role),
             joinedload(Team.members)
             .joinedload(TeamMember.user)
-            .joinedload(User.current_status)
+            .joinedload(User.current_status),
         )
     )
 
@@ -982,7 +1030,9 @@ async def send_registration_closed_notification(session: AsyncSession):
     failed_sends = 0
     processed_user_ids = set()  # чтобы один пользователь (например, наставник в нескольких командах) не получил несколько писем
 
-    logging.info(f"Начало рассылки уведомлений о закрытии регистрации. Всего активных команд: {total_teams}")
+    logging.info(
+        f"Начало рассылки уведомлений о закрытии регистрации. Всего активных команд: {total_teams}"
+    )
     start_time = datetime.now()
 
     for i, team in enumerate(active_teams, 1):
@@ -1012,7 +1062,7 @@ async def send_registration_closed_notification(session: AsyncSession):
                                             <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin-bottom: 30px;">
                                                 <tr>
                                                     <td align="center">
-                                                        <h1 style="color: #2196F3; font-size: 24px; margin: 0;">Регистрация на хакатон закрыта</h1>
+                                                        <h1 style="color: #2196F3; font-size: 24px; margin: 0;">Ваша команда участвует в хакатоне</h1>
                                                     </td>
                                                 </tr>
                                             </table>
@@ -1026,7 +1076,7 @@ async def send_registration_closed_notification(session: AsyncSession):
                                                 </tr>
                                                 <tr>
                                                     <td align="center" style="padding: 0 0 20px 0;">
-                                                        <p style="margin: 0;">Регистрация на хакатон завершена. В разделе "Моя команда" опубликованы исходные данные для выполнения задания.</p>
+                                                        <p style="margin: 0;">Поздравляем! Ваша команда успешно зарегистрирована и участвует в хакатоне. В разделе "Моя команда" доступны материалы и актуальная информация для дальнейшей работы.</p>
                                                     </td>
                                                 </tr>
                                                 <tr>
@@ -1036,7 +1086,7 @@ async def send_registration_closed_notification(session: AsyncSession):
                                                                 <td align="center" bgcolor="#2196F3" style="border-radius: 4px;">
                                                                     <a href="{settings.base_url}/profile/team" 
                                                                        style="display: inline-block; padding: 12px 24px; color: #ffffff; text-decoration: none; font-weight: bold;">
-                                                                        Перейти к исходным данным
+                                                                        Перейти в раздел "Моя команда"
                                                                     </a>
                                                                 </td>
                                                             </tr>
@@ -1071,22 +1121,25 @@ async def send_registration_closed_notification(session: AsyncSession):
             try:
                 success = await send_email_async(
                     to_email=member.user.email,
-                    subject="Регистрация закрыта - опубликованы исходные данные",
+                    subject="Ваша команда участвует в хакатоне",
                     body=html_content,
                     is_html=True,
                 )
                 if success:
                     successful_sends += 1
                     logging.info(
-                        f"[Команда {i}/{total_teams}] Отправлено уведомление участнику {member.user.full_name} ({member.user.email})")
+                        f"[Команда {i}/{total_teams}] Отправлено уведомление участнику {member.user.full_name} ({member.user.email})"
+                    )
                 else:
                     failed_sends += 1
                     logging.error(
-                        f"[Команда {i}/{total_teams}] Ошибка отправки участнику {member.user.full_name} ({member.user.email})")
+                        f"[Команда {i}/{total_teams}] Ошибка отправки участнику {member.user.full_name} ({member.user.email})"
+                    )
             except Exception as e:
                 failed_sends += 1
                 logging.error(
-                    f"[Команда {i}/{total_teams}] Исключение при отправке участнику {member.user.full_name} ({member.user.email}): {str(e)}")
+                    f"[Команда {i}/{total_teams}] Исключение при отправке участнику {member.user.full_name} ({member.user.email}): {str(e)}"
+                )
 
             await asyncio.sleep(0.1)
 
@@ -1108,13 +1161,15 @@ async def send_task_update_notification(session: AsyncSession):
     всем участникам активных команд активного события
     """
     from src.utils.event_utils import get_active_event
-    
+
     try:
         active_event = await get_active_event(session)
     except Exception:
-        logging.warning("Активное событие не найдено, пропускаем рассылку о дополнении к исходным данным")
+        logging.warning(
+            "Активное событие не найдено, пропускаем рассылку о дополнении к исходным данным"
+        )
         return
-    
+
     logging.info("Начинаю рассылку уведомлений о дополнении к исходным данным")
     start_time = datetime.now()
 
@@ -1125,10 +1180,8 @@ async def send_task_update_notification(session: AsyncSession):
             selectinload(Team.members)
             .selectinload(TeamMember.user)
             .selectinload(User.current_status),
-            selectinload(Team.members)
-            .selectinload(TeamMember.role),
-            selectinload(Team.members)
-            .selectinload(TeamMember.status)
+            selectinload(Team.members).selectinload(TeamMember.role),
+            selectinload(Team.members).selectinload(TeamMember.status),
         )
     )
     result = await session.execute(teams_query)
@@ -1145,7 +1198,8 @@ async def send_task_update_notification(session: AsyncSession):
         logging.info(f"Обработка команды {i}/{total_teams}: {team.team_name}")
 
         team_members = [
-            member for member in team.members
+            member
+            for member in team.members
             if member.status_id == team_router_state.accepted_status_id
         ]
 
@@ -1242,15 +1296,18 @@ async def send_task_update_notification(session: AsyncSession):
                 if success:
                     successful_sends += 1
                     logging.info(
-                        f"[Команда {i}/{total_teams}] Отправлено уведомление участнику {member.user.full_name} ({member.user.email})")
+                        f"[Команда {i}/{total_teams}] Отправлено уведомление участнику {member.user.full_name} ({member.user.email})"
+                    )
                 else:
                     failed_sends += 1
                     logging.error(
-                        f"[Команда {i}/{total_teams}] Ошибка отправки участнику {member.user.full_name} ({member.user.email})")
+                        f"[Команда {i}/{total_teams}] Ошибка отправки участнику {member.user.full_name} ({member.user.email})"
+                    )
             except Exception as e:
                 failed_sends += 1
                 logging.error(
-                    f"[Команда {i}/{total_teams}] Исключение при отправке участнику {member.user.full_name} ({member.user.email}): {str(e)}")
+                    f"[Команда {i}/{total_teams}] Исключение при отправке участнику {member.user.full_name} ({member.user.email}): {str(e)}"
+                )
 
             await asyncio.sleep(0.1)
 
@@ -1271,13 +1328,15 @@ async def send_hackathon_opening_notification(session: AsyncSession):
     Отправляет уведомление об открытии хакатона всем участникам активных команд активного события
     """
     from src.utils.event_utils import get_active_event
-    
+
     try:
         active_event = await get_active_event(session)
     except Exception:
-        logging.warning("Активное событие не найдено, пропускаем рассылку об открытии хакатона")
+        logging.warning(
+            "Активное событие не найдено, пропускаем рассылку об открытии хакатона"
+        )
         return
-    
+
     teams_query = (
         select(Team)
         .where(Team.event_id == active_event.id)
@@ -1285,10 +1344,8 @@ async def send_hackathon_opening_notification(session: AsyncSession):
             selectinload(Team.members)
             .selectinload(TeamMember.user)
             .selectinload(User.current_status),
-            selectinload(Team.members)
-            .selectinload(TeamMember.role),
-            selectinload(Team.members)
-            .selectinload(TeamMember.status)
+            selectinload(Team.members).selectinload(TeamMember.role),
+            selectinload(Team.members).selectinload(TeamMember.status),
         )
     )
     result = await session.execute(teams_query)
@@ -1299,14 +1356,17 @@ async def send_hackathon_opening_notification(session: AsyncSession):
     successful_sends = 0
     failed_sends = 0
 
-    logging.info(f"Начало рассылки уведомлений об открытии хакатона. Всего команд: {total_teams}")
+    logging.info(
+        f"Начало рассылки уведомлений об открытии хакатона. Всего команд: {total_teams}"
+    )
     start_time = datetime.now()
 
     for i, team in enumerate(active_teams, 1):
         logging.info(f"Обработка команды {i}/{total_teams}: {team.team_name}")
 
         team_members = [
-            member.user for member in team.members
+            member.user
+            for member in team.members
             if member.status_id == team_router_state.accepted_status_id
         ]
 
@@ -1400,15 +1460,18 @@ async def send_hackathon_opening_notification(session: AsyncSession):
                 if success:
                     successful_sends += 1
                     logging.info(
-                        f"[Команда {i}/{total_teams}] Отправлено уведомление участнику {member.full_name} ({member.email})")
+                        f"[Команда {i}/{total_teams}] Отправлено уведомление участнику {member.full_name} ({member.email})"
+                    )
                 else:
                     failed_sends += 1
                     logging.error(
-                        f"[Команда {i}/{total_teams}] Ошибка отправки участнику {member.full_name} ({member.email})")
+                        f"[Команда {i}/{total_teams}] Ошибка отправки участнику {member.full_name} ({member.email})"
+                    )
             except Exception as e:
                 failed_sends += 1
                 logging.error(
-                    f"[Команда {i}/{total_teams}] Исключение при отправке участнику {member.full_name} ({member.email}): {str(e)}")
+                    f"[Команда {i}/{total_teams}] Исключение при отправке участнику {member.full_name} ({member.email}): {str(e)}"
+                )
 
             await asyncio.sleep(0.1)
 
@@ -1421,22 +1484,143 @@ async def send_hackathon_opening_notification(session: AsyncSession):
 Всего команд: {total_teams}
 Успешно отправлено: {successful_sends}
 Ошибок отправки: {failed_sends}
-""")
+    """)
 
 
-async def send_hackathon_started_notification(session: AsyncSession):
+KICKOFF_MEETING_EXTRA_RECIPIENTS = ["kbelozerov1@gmail.com"]
+
+
+def build_kickoff_meeting_email_html(
+    full_name: str, team_name: str | None = None
+) -> str:
+    team_name_block = ""
+    if team_name:
+        team_name_block = f"""
+                                                <tr>
+                                                    <td align="center" style="padding: 0 0 20px 0;">
+                                                        <p style="margin: 0;">Команда: {team_name}</p>
+                                                    </td>
+                                                </tr>
+        """
+
+    return f"""
+            <!DOCTYPE html>
+            <html>
+                <head>
+                    <meta charset="utf-8">
+                    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                </head>
+                <body style="margin: 0; padding: 0; background-color: #f5f5f5;">
+                    <table border="0" cellpadding="0" cellspacing="0" width="100%" style="font-family: Arial, sans-serif;">
+                        <tr>
+                            <td align="center" style="padding: 20px 0;">
+                                <table border="0" cellpadding="0" cellspacing="0" width="600" style="background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);">
+                                    <tr>
+                                        <td align="center" style="padding: 40px 30px;">
+                                            <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin-bottom: 30px;">
+                                                <tr>
+                                                    <td align="center">
+                                                        <h1 style="color: #2196F3; font-size: 24px; margin: 0;">Установочная встреча Хакатона</h1>
+                                                    </td>
+                                                </tr>
+                                            </table>
+
+                                            <table border="0" cellpadding="0" cellspacing="0" width="100%">
+                                                <tr>
+                                                    <td align="center" style="padding: 0 0 20px 0;">
+                                                        <p style="margin: 0;">Здравствуйте, {full_name}!</p>
+                                                    </td>
+                                                </tr>
+                                                <tr>
+                                                    <td align="center" style="padding: 0 0 20px 0;">
+                                                        <p style="margin: 0;">Приглашаем вас на установочную встречу с участниками Хакатона, которая состоится <strong>27.03.2026 в 13:00 (МСК)</strong>.</p>
+                                                    </td>
+                                                </tr>
+                                                <tr>
+                                                    <td align="center" style="padding: 0 0 20px 0;">
+                                                        <p style="margin: 0;">Подключиться к установочной встрече можно по ссылке ниже.</p>
+                                                    </td>
+                                                </tr>
+                                                <tr>
+                                                    <td align="center" style="padding: 20px 0;">
+                                                        <table border="0" cellpadding="0" cellspacing="0">
+                                                            <tr>
+                                                                <td align="center" bgcolor="#2196F3" style="border-radius: 4px;">
+                                                                    <a href="https://bigbb2.tyuiu.ru/b/zah-tka-oxi-n4i"
+                                                                       style="display: inline-block; padding: 12px 24px; color: #ffffff; text-decoration: none; font-weight: bold;">
+                                                                        Подключиться к встрече
+                                                                    </a>
+                                                                </td>
+                                                            </tr>
+                                                        </table>
+                                                    </td>
+                                                </tr>
+{team_name_block}
+                                            </table>
+
+                                            <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin-top: 30px;">
+                                                <tr>
+                                                    <td align="center" style="color: #666666; font-size: 14px;">
+                                                        <p style="margin: 0;">Это автоматическое уведомление, пожалуйста, не отвечайте на него.</p>
+                                                    </td>
+                                                </tr>
+                                            </table>
+                                        </td>
+                                    </tr>
+                                </table>
+                            </td>
+                        </tr>
+                    </table>
+                </body>
+            </html>
     """
-    Отправляет уведомление о начале хакатона и публикации тестовых данных
-    всем активным командам активного события
+
+
+async def send_kickoff_meeting_notification_to_extra_recipients():
+    successful_sends = 0
+    failed_sends = 0
+
+    for recipient_email in KICKOFF_MEETING_EXTRA_RECIPIENTS:
+        try:
+            success = await send_email_async(
+                to_email=recipient_email,
+                subject="Установочная встреча Хакатона - 27.03.2026 в 13:00 (МСК)",
+                body=build_kickoff_meeting_email_html("коллеги"),
+                is_html=True,
+            )
+            if success:
+                successful_sends += 1
+                logging.info(
+                    f"Отправлено дополнительное уведомление об установочной встрече на {recipient_email}"
+                )
+            else:
+                failed_sends += 1
+                logging.error(
+                    f"Ошибка отправки дополнительного уведомления об установочной встрече на {recipient_email}"
+                )
+        except Exception as e:
+            failed_sends += 1
+            logging.error(
+                f"Исключение при отправке дополнительного уведомления об установочной встрече на {recipient_email}: {str(e)}"
+            )
+
+    return successful_sends, failed_sends
+
+
+async def send_kickoff_meeting_notification(session: AsyncSession):
+    """
+    Отправляет уведомление об установочной встрече всем участникам активных команд активного события
     """
     from src.utils.event_utils import get_active_event
-    
+
     try:
         active_event = await get_active_event(session)
     except Exception:
-        logging.warning("Активное событие не найдено, пропускаем рассылку о старте хакатона")
+        logging.warning(
+            "Активное событие не найдено, пропускаем рассылку об установочной встрече"
+        )
         return
-    
+
     teams_query = (
         select(Team)
         .where(Team.event_id == active_event.id)
@@ -1444,10 +1628,8 @@ async def send_hackathon_started_notification(session: AsyncSession):
             selectinload(Team.members)
             .selectinload(TeamMember.user)
             .selectinload(User.current_status),
-            selectinload(Team.members)
-            .selectinload(TeamMember.role),
-            selectinload(Team.members)
-            .selectinload(TeamMember.status)
+            selectinload(Team.members).selectinload(TeamMember.role),
+            selectinload(Team.members).selectinload(TeamMember.status),
         )
     )
     result = await session.execute(teams_query)
@@ -1458,12 +1640,117 @@ async def send_hackathon_started_notification(session: AsyncSession):
     successful_sends = 0
     failed_sends = 0
 
-    logging.info(f"Начало рассылки уведомлений о старте хакатона. Всего команд: {total_teams}")
+    logging.info(
+        f"Начало рассылки уведомлений об установочной встрече. Всего команд: {total_teams}"
+    )
+    start_time = datetime.now()
+
+    for i, team in enumerate(active_teams, 1):
+        logging.info(f"Обработка команды {i}/{total_teams}: {team.team_name}")
+
+        team_members = [
+            member.user
+            for member in team.members
+            if member.status_id == team_router_state.accepted_status_id
+            and member.role_id
+            in [
+                team_router_state.teamlead_role_id,
+                team_router_state.member_role_id,
+            ]
+        ]
+
+        for member in team_members:
+            html_content = build_kickoff_meeting_email_html(
+                member.full_name, team.team_name
+            )
+
+            try:
+                success = await send_email_async(
+                    to_email=member.email,
+                    subject="Установочная встреча Хакатона - 27.03.2026 в 13:00 (МСК)",
+                    body=html_content,
+                    is_html=True,
+                )
+                if success:
+                    successful_sends += 1
+                    logging.info(
+                        f"[Команда {i}/{total_teams}] Отправлено уведомление участнику {member.full_name} ({member.email})"
+                    )
+                else:
+                    failed_sends += 1
+                    logging.error(
+                        f"[Команда {i}/{total_teams}] Ошибка отправки участнику {member.full_name} ({member.email})"
+                    )
+            except Exception as e:
+                failed_sends += 1
+                logging.error(
+                    f"[Команда {i}/{total_teams}] Исключение при отправке участнику {member.full_name} ({member.email}): {str(e)}"
+                )
+
+            await asyncio.sleep(0.1)
+
+    (
+        extra_successful_sends,
+        extra_failed_sends,
+    ) = await send_kickoff_meeting_notification_to_extra_recipients()
+    successful_sends += extra_successful_sends
+    failed_sends += extra_failed_sends
+
+    end_time = datetime.now()
+    duration = (end_time - start_time).total_seconds()
+
+    logging.info(f"""
+Рассылка уведомлений об установочной встрече завершена!
+Время выполнения: {duration:.2f} секунд
+Всего команд: {total_teams}
+Успешно отправлено: {successful_sends}
+Ошибок отправки: {failed_sends}
+    """)
+
+
+async def send_hackathon_started_notification(session: AsyncSession):
+    """
+    Отправляет уведомление о начале хакатона и публикации тестовых данных
+    всем активным командам активного события
+    """
+    from src.utils.event_utils import get_active_event
+
+    try:
+        active_event = await get_active_event(session)
+    except Exception:
+        logging.warning(
+            "Активное событие не найдено, пропускаем рассылку о старте хакатона"
+        )
+        return
+
+    teams_query = (
+        select(Team)
+        .where(Team.event_id == active_event.id)
+        .options(
+            selectinload(Team.members)
+            .selectinload(TeamMember.user)
+            .selectinload(User.current_status),
+            selectinload(Team.members).selectinload(TeamMember.role),
+            selectinload(Team.members).selectinload(TeamMember.status),
+        )
+    )
+    result = await session.execute(teams_query)
+    teams = result.scalars().all()
+
+    active_teams = [team for team in teams if team.get_status() == "active"]
+    total_teams = len(active_teams)
+    successful_sends = 0
+    failed_sends = 0
+
+    logging.info(
+        f"Начало рассылки уведомлений о старте хакатона. Всего команд: {total_teams}"
+    )
     start_time = datetime.now()
 
     for i, team in enumerate(active_teams, 1):
         team_members = [
-            member.user for member in team.members
+            member.user
+            for member in team.members
             if member.status_id == team_router_state.accepted_status_id
         ]
 
@@ -1557,15 +1844,18 @@ async def send_hackathon_started_notification(session: AsyncSession):
                 if success:
                     successful_sends += 1
                     logging.info(
-                        f"[Команда {i}/{total_teams}] Отправлено уведомление участнику {member.full_name} ({member.email})")
+                        f"[Команда {i}/{total_teams}] Отправлено уведомление участнику {member.full_name} ({member.email})"
+                    )
                 else:
                     failed_sends += 1
                     logging.error(
-                        f"[Команда {i}/{total_teams}] Ошибка отправки участнику {member.full_name} ({member.email})")
+                        f"[Команда {i}/{total_teams}] Ошибка отправки участнику {member.full_name} ({member.email})"
+                    )
             except Exception as e:
                 failed_sends += 1
                 logging.error(
-                    f"[Команда {i}/{total_teams}] Исключение при отправке участнику {member.full_name} ({member.email}): {str(e)}")
+                    f"[Команда {i}/{total_teams}] Исключение при отправке участнику {member.full_name} ({member.email}): {str(e)}"
+                )
 
             await asyncio.sleep(0.1)
 
@@ -1587,13 +1877,15 @@ async def send_solution_submission_notification(session: AsyncSession):
     всем активным командам активного события
     """
     from src.utils.event_utils import get_active_event
-    
+
     try:
         active_event = await get_active_event(session)
     except Exception:
-        logging.warning("Активное событие не найдено, пропускаем рассылку о завершении хакатона")
+        logging.warning(
+            "Активное событие не найдено, пропускаем рассылку о завершении хакатона"
+        )
         return
-    
+
     teams_query = (
         select(Team)
         .where(Team.event_id == active_event.id)
@@ -1601,10 +1893,8 @@ async def send_solution_submission_notification(session: AsyncSession):
             selectinload(Team.members)
             .selectinload(TeamMember.user)
             .selectinload(User.current_status),
-            selectinload(Team.members)
-            .selectinload(TeamMember.role),
-            selectinload(Team.members)
-            .selectinload(TeamMember.status)
+            selectinload(Team.members).selectinload(TeamMember.role),
+            selectinload(Team.members).selectinload(TeamMember.status),
         )
     )
     result = await session.execute(teams_query)
@@ -1615,12 +1905,15 @@ async def send_solution_submission_notification(session: AsyncSession):
     successful_sends = 0
     failed_sends = 0
 
-    logging.info(f"Начало рассылки уведомлений о завершении хакатона. Всего команд: {total_teams}")
+    logging.info(
+        f"Начало рассылки уведомлений о завершении хакатона. Всего команд: {total_teams}"
+    )
     start_time = datetime.now()
 
     for i, team in enumerate(active_teams, 1):
         team_members = [
-            member.user for member in team.members
+            member.user
+            for member in team.members
             if member.status_id == team_router_state.accepted_status_id
         ]
 
@@ -1709,15 +2002,18 @@ async def send_solution_submission_notification(session: AsyncSession):
                 if success:
                     successful_sends += 1
                     logging.info(
-                        f"[Команда {i}/{total_teams}] Отправлено уведомление участнику {member.full_name} ({member.email})")
+                        f"[Команда {i}/{total_teams}] Отправлено уведомление участнику {member.full_name} ({member.email})"
+                    )
                 else:
                     failed_sends += 1
                     logging.error(
-                        f"[Команда {i}/{total_teams}] Ошибка отправки участнику {member.full_name} ({member.email})")
+                        f"[Команда {i}/{total_teams}] Ошибка отправки участнику {member.full_name} ({member.email})"
+                    )
             except Exception as e:
                 failed_sends += 1
                 logging.error(
-                    f"[Команда {i}/{total_teams}] Исключение при отправке участнику {member.full_name} ({member.email}): {str(e)}")
+                    f"[Команда {i}/{total_teams}] Исключение при отправке участнику {member.full_name} ({member.email}): {str(e)}"
+                )
 
             await asyncio.sleep(0.1)
 
@@ -1739,13 +2035,15 @@ async def send_hackathon_ended_notification(session: AsyncSession):
     всем активным командам активного события
     """
     from src.utils.event_utils import get_active_event
-    
+
     try:
         active_event = await get_active_event(session)
     except Exception:
-        logging.warning("Активное событие не найдено, пропускаем рассылку об окончании хакатона")
+        logging.warning(
+            "Активное событие не найдено, пропускаем рассылку об окончании хакатона"
+        )
         return
-    
+
     teams_query = (
         select(Team)
         .where(Team.event_id == active_event.id)
@@ -1753,10 +2051,8 @@ async def send_hackathon_ended_notification(session: AsyncSession):
             selectinload(Team.members)
             .selectinload(TeamMember.user)
             .selectinload(User.current_status),
-            selectinload(Team.members)
-            .selectinload(TeamMember.role),
-            selectinload(Team.members)
-            .selectinload(TeamMember.status)
+            selectinload(Team.members).selectinload(TeamMember.role),
+            selectinload(Team.members).selectinload(TeamMember.status),
         )
     )
     result = await session.execute(teams_query)
@@ -1767,12 +2063,15 @@ async def send_hackathon_ended_notification(session: AsyncSession):
     successful_sends = 0
     failed_sends = 0
 
-    logging.info(f"Начало рассылки уведомлений об окончании хакатона. Всего команд: {total_teams}")
+    logging.info(
+        f"Начало рассылки уведомлений об окончании хакатона. Всего команд: {total_teams}"
+    )
     start_time = datetime.now()
 
     for i, team in enumerate(active_teams, 1):
         team_members = [
-            member.user for member in team.members
+            member.user
+            for member in team.members
             if member.status_id == team_router_state.accepted_status_id
         ]
 
@@ -1852,15 +2151,18 @@ async def send_hackathon_ended_notification(session: AsyncSession):
                 if success:
                     successful_sends += 1
                     logging.info(
-                        f"[Команда {i}/{total_teams}] Отправлено уведомление участнику {member.full_name} ({member.email})")
+                        f"[Команда {i}/{total_teams}] Отправлено уведомление участнику {member.full_name} ({member.email})"
+                    )
                 else:
                     failed_sends += 1
                     logging.error(
-                        f"[Команда {i}/{total_teams}] Ошибка отправки участнику {member.full_name} ({member.email})")
+                        f"[Команда {i}/{total_teams}] Ошибка отправки участнику {member.full_name} ({member.email})"
+                    )
             except Exception as e:
                 failed_sends += 1
                 logging.error(
-                    f"[Команда {i}/{total_teams}] Исключение при отправке участнику {member.full_name} ({member.email}): {str(e)}")
+                    f"[Команда {i}/{total_teams}] Исключение при отправке участнику {member.full_name} ({member.email}): {str(e)}"
+                )
 
             await asyncio.sleep(2)
 
@@ -1882,10 +2184,10 @@ async def send_judge_opening_notification(session: AsyncSession):
     """
     from src.models.event import EventJudge
     from src.utils.event_utils import get_active_event
-    
+
     # Получаем активное событие
     active_event = await get_active_event(session)
-    
+
     # Получаем жюри, привязанные к активному событию
     users_query = (
         select(User)
@@ -1902,7 +2204,8 @@ async def send_judge_opening_notification(session: AsyncSession):
     failed_sends = 0
 
     logging.info(
-        f"Начало рассылки уведомлений об очном открытии хакатона членам жюри. Всего получателей: {total_users}")
+        f"Начало рассылки уведомлений об очном открытии хакатона членам жюри. Всего получателей: {total_users}"
+    )
     start_time = datetime.now()
 
     for i, user in enumerate(users, 1):
@@ -1980,13 +2283,19 @@ async def send_judge_opening_notification(session: AsyncSession):
             )
             if success:
                 successful_sends += 1
-                logging.info(f"[{i}/{total_users}] Отправлено уведомление на email: {user.email}")
+                logging.info(
+                    f"[{i}/{total_users}] Отправлено уведомление на email: {user.email}"
+                )
             else:
                 failed_sends += 1
-                logging.error(f"[{i}/{total_users}] Ошибка отправки на email: {user.email}")
+                logging.error(
+                    f"[{i}/{total_users}] Ошибка отправки на email: {user.email}"
+                )
         except Exception as e:
             failed_sends += 1
-            logging.error(f"[{i}/{total_users}] Исключение при отправке на email {user.email}: {str(e)}")
+            logging.error(
+                f"[{i}/{total_users}] Исключение при отправке на email {user.email}: {str(e)}"
+            )
 
         if i < total_users:
             await asyncio.sleep(0.1)
@@ -2009,13 +2318,15 @@ async def send_defense_schedule_notification(session: AsyncSession):
     всем активным командам активного события
     """
     from src.utils.event_utils import get_active_event
-    
+
     try:
         active_event = await get_active_event(session)
     except Exception:
-        logging.warning("Активное событие не найдено, пропускаем рассылку о защите проектов")
+        logging.warning(
+            "Активное событие не найдено, пропускаем рассылку о защите проектов"
+        )
         return
-    
+
     teams_query = (
         select(Team)
         .where(Team.event_id == active_event.id)
@@ -2023,10 +2334,8 @@ async def send_defense_schedule_notification(session: AsyncSession):
             selectinload(Team.members)
             .selectinload(TeamMember.user)
             .selectinload(User.current_status),
-            selectinload(Team.members)
-            .selectinload(TeamMember.role),
-            selectinload(Team.members)
-            .selectinload(TeamMember.status)
+            selectinload(Team.members).selectinload(TeamMember.role),
+            selectinload(Team.members).selectinload(TeamMember.status),
         )
     )
     result = await session.execute(teams_query)
@@ -2037,12 +2346,15 @@ async def send_defense_schedule_notification(session: AsyncSession):
     successful_sends = 0
     failed_sends = 0
 
-    logging.info(f"Начало рассылки уведомлений о защите проектов. Всего команд: {total_teams}")
+    logging.info(
+        f"Начало рассылки уведомлений о защите проектов. Всего команд: {total_teams}"
+    )
     start_time = datetime.now()
 
     for i, team in enumerate(active_teams, 1):
         team_members = [
-            member.user for member in team.members
+            member.user
+            for member in team.members
             if member.status_id == team_router_state.accepted_status_id
         ]
 
@@ -2139,15 +2451,18 @@ async def send_defense_schedule_notification(session: AsyncSession):
                 if success:
                     successful_sends += 1
                     logging.info(
-                        f"[Команда {i}/{total_teams}] Отправлено уведомление участнику {member.full_name} ({member.email})")
+                        f"[Команда {i}/{total_teams}] Отправлено уведомление участнику {member.full_name} ({member.email})"
+                    )
                 else:
                     failed_sends += 1
                     logging.error(
-                        f"[Команда {i}/{total_teams}] Ошибка отправки участнику {member.full_name} ({member.email})")
+                        f"[Команда {i}/{total_teams}] Ошибка отправки участнику {member.full_name} ({member.email})"
+                    )
             except Exception as e:
                 failed_sends += 1
                 logging.error(
-                    f"[Команда {i}/{total_teams}] Исключение при отправке участнику {member.full_name} ({member.email}): {str(e)}")
+                    f"[Команда {i}/{total_teams}] Исключение при отправке участнику {member.full_name} ({member.email}): {str(e)}"
+                )
 
             await asyncio.sleep(0.1)
 
@@ -2168,13 +2483,15 @@ async def send_closing_ceremony_notification(session: AsyncSession):
     Отправляет уведомление о торжественном закрытии хакатона всем активным командам активного события
     """
     from src.utils.event_utils import get_active_event
-    
+
     try:
         active_event = await get_active_event(session)
     except Exception:
-        logging.warning("Активное событие не найдено, пропускаем рассылку о торжественном закрытии")
+        logging.warning(
+            "Активное событие не найдено, пропускаем рассылку о торжественном закрытии"
+        )
         return
-    
+
     teams_query = (
         select(Team)
         .where(Team.event_id == active_event.id)
@@ -2182,10 +2499,8 @@ async def send_closing_ceremony_notification(session: AsyncSession):
             selectinload(Team.members)
             .selectinload(TeamMember.user)
             .selectinload(User.current_status),
-            selectinload(Team.members)
-            .selectinload(TeamMember.role),
-            selectinload(Team.members)
-            .selectinload(TeamMember.status)
+            selectinload(Team.members).selectinload(TeamMember.role),
+            selectinload(Team.members).selectinload(TeamMember.status),
         )
     )
     result = await session.execute(teams_query)
@@ -2196,12 +2511,15 @@ async def send_closing_ceremony_notification(session: AsyncSession):
     successful_sends = 0
     failed_sends = 0
 
-    logging.info(f"Начало рассылки уведомлений о торжественном закрытии. Всего команд: {total_teams}")
+    logging.info(
+        f"Начало рассылки уведомлений о торжественном закрытии. Всего команд: {total_teams}"
+    )
     start_time = datetime.now()
 
     for i, team in enumerate(active_teams, 1):
         team_members = [
-            member.user for member in team.members
+            member.user
+            for member in team.members
             if member.status_id == team_router_state.accepted_status_id
         ]
 
@@ -2325,12 +2643,12 @@ async def check_and_start_hackathon():
 
     try:
         from src.utils.event_utils import get_active_event
+
         active_event = await get_active_event(session)
-        
+
         result = await session.execute(
             select(Stage).where(
-                Stage.is_active == True,
-                Stage.event_id == active_event.id
+                Stage.is_active == True, Stage.event_id == active_event.id
             )
         )
         current_stage = result.scalar_one_or_none()
@@ -2339,7 +2657,7 @@ async def check_and_start_hackathon():
             result = await session.execute(
                 select(Stage).where(
                     Stage.type == StageType.TASK_DISTRIBUTION.value,
-                    Stage.event_id == active_event.id
+                    Stage.event_id == active_event.id,
                 )
             )
             task_distribution_stage = result.scalar_one_or_none()
@@ -2379,14 +2697,15 @@ async def check_and_close_registration():
 
     try:
         from src.utils.event_utils import get_active_event
+
         active_event = await get_active_event(session)
-        
+
         result = await session.execute(
             select(Stage).where(
                 and_(
                     Stage.is_active == True,
                     Stage.type == StageType.REGISTRATION.value,
-                    Stage.event_id == active_event.id
+                    Stage.event_id == active_event.id,
                 )
             )
         )
@@ -2396,7 +2715,7 @@ async def check_and_close_registration():
             result = await session.execute(
                 select(Stage).where(
                     Stage.type == StageType.REGISTRATION_CLOSED.value,
-                    Stage.event_id == active_event.id
+                    Stage.event_id == active_event.id,
                 )
             )
             registration_closed_stage = result.scalar_one_or_none()
@@ -2411,7 +2730,9 @@ async def check_and_close_registration():
                 registration_closed_stage.is_active = True
 
                 await session.commit()
-                logging.info("Этап регистрации успешно изменен на этап регистрация закрыта")
+                logging.info(
+                    "Этап регистрации успешно изменен на этап регистрация закрыта"
+                )
 
                 await send_registration_closed_notification(session)
             else:
@@ -2426,7 +2747,7 @@ async def check_and_close_registration():
         await session.close()
 
 
-tz = pytz.timezone('Europe/Moscow')
+tz = pytz.timezone("Europe/Moscow")
 target_date = tz.localize(datetime(2025, 4, 4, 0, 0, 0))
 hackathon_start_date = tz.localize(datetime(2025, 4, 9, 9, 30, 0))
 solution_submission_date = tz.localize(datetime(2025, 4, 10, 9, 0, 0))
@@ -2441,12 +2762,16 @@ async def check_time_and_close_registration():
     logging.info(f"Проверка времени. Текущее: {current_date}, Цель: {target_date}")
 
     if current_date >= target_date:
-        logging.info(f"Целевая дата {target_date} достигнута. Выполняю закрытие регистрации.")
+        logging.info(
+            f"Целевая дата {target_date} достигнута. Выполняю закрытие регистрации."
+        )
         await check_and_close_registration()
-        scheduler.remove_job('check_registration_time')
+        scheduler.remove_job("check_registration_time")
         logging.info("Задача закрытия регистрации выполнена и удалена из планировщика")
     else:
-        logging.info(f"Целевая дата еще не достигнута. Ожидаю... Текущее время: {current_date}")
+        logging.info(
+            f"Целевая дата еще не достигнута. Ожидаю... Текущее время: {current_date}"
+        )
 
 
 async def check_time_and_start_hackathon():
@@ -2455,23 +2780,31 @@ async def check_time_and_start_hackathon():
     При первом запуске рассчитывает точное время следующей проверки.
     """
     current_date = datetime.now(tz)
-    logging.info(f"Проверка времени для старта хакатона. Текущее: {current_date}, Цель: {hackathon_start_date}")
+    logging.info(
+        f"Проверка времени для старта хакатона. Текущее: {current_date}, Цель: {hackathon_start_date}"
+    )
 
     if current_date >= hackathon_start_date:
-        logging.info(f"Целевая дата {hackathon_start_date} достигнута. Выполняю запуск хакатона.")
+        logging.info(
+            f"Целевая дата {hackathon_start_date} достигнута. Выполняю запуск хакатона."
+        )
         await check_and_start_hackathon()
-        scheduler.remove_job('check_hackathon_start_time')
+        scheduler.remove_job("check_hackathon_start_time")
         logging.info("Задача запуска хакатона выполнена и удалена из планировщика")
     else:
         # Рассчитываем время до следующей минуты
-        next_minute = current_date.replace(second=0, microsecond=0) + timedelta(minutes=1)
+        next_minute = current_date.replace(second=0, microsecond=0) + timedelta(
+            minutes=1
+        )
         delay = (next_minute - current_date).total_seconds()
 
         if delay > 0:
-            logging.info(f"Корректировка расписания. Следующая проверка через {delay:.2f} секунд")
+            logging.info(
+                f"Корректировка расписания. Следующая проверка через {delay:.2f} секунд"
+            )
 
             # Удаляем текущее расписание
-            scheduler.remove_job('check_hackathon_start_time')
+            scheduler.remove_job("check_hackathon_start_time")
 
             # Создаем новое расписание, начиная с следующей минуты
             # scheduler.add_job(
@@ -2483,7 +2816,9 @@ async def check_time_and_start_hackathon():
             #     replace_existing=True
             # )
 
-        logging.info(f"Целевая дата еще не достигнута. Следующая проверка в {next_minute}")
+        logging.info(
+            f"Целевая дата еще не достигнута. Следующая проверка в {next_minute}"
+        )
 
 
 scheduler = AsyncIOScheduler()
@@ -2509,12 +2844,12 @@ async def check_and_start_solution_submission():
 
     try:
         from src.utils.event_utils import get_active_event
+
         active_event = await get_active_event(session)
-        
+
         result = await session.execute(
             select(Stage).where(
-                Stage.is_active == True,
-                Stage.event_id == active_event.id
+                Stage.is_active == True, Stage.event_id == active_event.id
             )
         )
         current_stage = result.scalar_one_or_none()
@@ -2523,7 +2858,7 @@ async def check_and_start_solution_submission():
             result = await session.execute(
                 select(Stage).where(
                     Stage.type == StageType.SOLUTION_SUBMISSION.value,
-                    Stage.event_id == active_event.id
+                    Stage.event_id == active_event.id,
                 )
             )
             solution_submission_stage = result.scalar_one_or_none()
@@ -2563,12 +2898,12 @@ async def check_and_start_solution_submission():
 
     try:
         from src.utils.event_utils import get_active_event
+
         active_event = await get_active_event(session)
-        
+
         result = await session.execute(
             select(Stage).where(
-                Stage.is_active == True,
-                Stage.event_id == active_event.id
+                Stage.is_active == True, Stage.event_id == active_event.id
             )
         )
         current_stage = result.scalar_one_or_none()
@@ -2577,7 +2912,7 @@ async def check_and_start_solution_submission():
             result = await session.execute(
                 select(Stage).where(
                     Stage.type == StageType.SOLUTION_SUBMISSION.value,
-                    Stage.event_id == active_event.id
+                    Stage.event_id == active_event.id,
                 )
             )
             solution_submission_stage = result.scalar_one_or_none()
@@ -2617,12 +2952,12 @@ async def check_and_start_solution_review():
 
     try:
         from src.utils.event_utils import get_active_event
+
         active_event = await get_active_event(session)
-        
+
         result = await session.execute(
             select(Stage).where(
-                Stage.is_active == True,
-                Stage.event_id == active_event.id
+                Stage.is_active == True, Stage.event_id == active_event.id
             )
         )
         current_stage = result.scalar_one_or_none()
@@ -2631,7 +2966,7 @@ async def check_and_start_solution_review():
             result = await session.execute(
                 select(Stage).where(
                     Stage.type == StageType.SOLUTION_REVIEW.value,
-                    Stage.event_id == active_event.id
+                    Stage.event_id == active_event.id,
                 )
             )
             solution_review_stage = result.scalar_one_or_none()
@@ -2667,22 +3002,29 @@ async def check_time_and_start_solution_submission():
     """
     current_date = datetime.now(tz)
     logging.info(
-        f"Проверка времени для этапа solution_submission. Текущее: {current_date}, Цель: {solution_submission_date}")
+        f"Проверка времени для этапа solution_submission. Текущее: {current_date}, Цель: {solution_submission_date}"
+    )
 
     if current_date >= solution_submission_date:
-        logging.info(f"Целевая дата {solution_submission_date} достигнута. Выполняю смену этапа.")
+        logging.info(
+            f"Целевая дата {solution_submission_date} достигнута. Выполняю смену этапа."
+        )
         await check_and_start_solution_submission()
-        scheduler.remove_job('check_solution_submission_time')
-        logging.info("Задача смены этапа на solution_submission выполнена и удалена из планировщика")
+        scheduler.remove_job("check_solution_submission_time")
+        logging.info(
+            "Задача смены этапа на solution_submission выполнена и удалена из планировщика"
+        )
     else:
-        next_minute = current_date.replace(second=0, microsecond=0) + timedelta(minutes=1)
+        next_minute = current_date.replace(second=0, microsecond=0) + timedelta(
+            minutes=1
+        )
         delay = (next_minute - current_date).total_seconds()
 
         if delay > 0:
             scheduler.reschedule_job(
-                'check_solution_submission_time',
+                "check_solution_submission_time",
                 trigger=IntervalTrigger(minutes=1),
-                next_run_time=next_minute
+                next_run_time=next_minute,
             )
 
 
@@ -2691,22 +3033,30 @@ async def check_time_and_start_solution_review():
     Проверяет время и меняет этап на solution_review, если наступила целевая дата
     """
     current_date = datetime.now(tz)
-    logging.info(f"Проверка времени для этапа solution_review. Текущее: {current_date}, Цель: {solution_review_date}")
+    logging.info(
+        f"Проверка времени для этапа solution_review. Текущее: {current_date}, Цель: {solution_review_date}"
+    )
 
     if current_date >= solution_review_date:
-        logging.info(f"Целевая дата {solution_review_date} достигнута. Выполняю смену этапа.")
+        logging.info(
+            f"Целевая дата {solution_review_date} достигнута. Выполняю смену этапа."
+        )
         await check_and_start_solution_review()
-        scheduler.remove_job('check_solution_review_time')
-        logging.info("Задача смены этапа на solution_review выполнена и удалена из планировщика")
+        scheduler.remove_job("check_solution_review_time")
+        logging.info(
+            "Задача смены этапа на solution_review выполнена и удалена из планировщика"
+        )
     else:
-        next_minute = current_date.replace(second=0, microsecond=0) + timedelta(minutes=1)
+        next_minute = current_date.replace(second=0, microsecond=0) + timedelta(
+            minutes=1
+        )
         delay = (next_minute - current_date).total_seconds()
 
         if delay > 0:
             scheduler.reschedule_job(
-                'check_solution_review_time',
+                "check_solution_review_time",
                 trigger=IntervalTrigger(minutes=1),
-                next_run_time=next_minute
+                next_run_time=next_minute,
             )
 
 
@@ -2714,11 +3064,13 @@ initial_check_date = datetime.now(tz)
 next_minute = initial_check_date.replace(second=0, microsecond=0) + timedelta(minutes=1)
 
 
-async def activate_stage_automatically(stage: Stage, session: AsyncSession, reason: str = "автоматически"):
+async def activate_stage_automatically(
+    stage: Stage, session: AsyncSession, reason: str = "автоматически"
+):
     """
     Универсальная функция для автоматической активации этапа
     Деактивирует текущий активный этап и активирует указанный
-    
+
     Args:
         stage: Этап для активации
         session: Сессия БД
@@ -2726,22 +3078,21 @@ async def activate_stage_automatically(stage: Stage, session: AsyncSession, reas
     """
     from src.utils.event_utils import get_active_event
     from src.utils.router_states import stage_router_state
-    
+
     try:
         active_event = await get_active_event(session)
-        
+
         if stage.event_id != active_event.id:
             logging.warning(f"Этап {stage.id} не принадлежит активному событию")
             return False
-        
+
         # Получаем текущий активный этап
         current_stage_query = select(Stage).where(
-            Stage.is_active == True,
-            Stage.event_id == active_event.id
+            Stage.is_active == True, Stage.event_id == active_event.id
         )
         current_stage_result = await session.execute(current_stage_query)
         current_stage = current_stage_result.scalar_one_or_none()
-        
+
         # Деактивируем текущий этап
         if current_stage:
             await session.execute(
@@ -2750,30 +3101,32 @@ async def activate_stage_automatically(stage: Stage, session: AsyncSession, reas
                 .values(is_active=False)
             )
             logging.info(f"Этап '{current_stage.name}' деактивирован")
-        
+
         # Активируем новый этап
         stage.is_active = True
         await session.commit()
         await session.refresh(stage)
-        
+
         # Обновляем состояние роутера
         await stage_router_state.initialize(session)
-        
+
         logging.info(f"Этап '{stage.name}' успешно активирован {reason}")
-        
+
         # Если это registration_closed, отправляем уведомления
         if stage.type == StageType.REGISTRATION_CLOSED.value:
             await send_registration_closed_notification(session)
-        
+
         return True
-        
+
     except Exception as e:
         logging.error(f"Ошибка при активации этапа {stage.id}: {str(e)}")
         await session.rollback()
         return False
 
 
-async def activate_stage_automatically_background(stage_id: UUID, reason: str = "автоматически"):
+async def activate_stage_automatically_background(
+    stage_id: UUID, reason: str = "автоматически"
+):
     """
     Обертка для автоматической активации этапа в фоновом режиме.
     Создает собственную сессию БД, чтобы не зависеть от сессии HTTP‑запроса.
@@ -2784,11 +3137,11 @@ async def activate_stage_automatically_background(stage_id: UUID, reason: str = 
         stage_query = select(Stage).where(Stage.id == stage_id)
         stage_result = await session.execute(stage_query)
         stage = stage_result.scalar_one_or_none()
-        
+
         if not stage:
             logging.error(f"Этап {stage_id} не найден для автоматической активации")
             return
-        
+
         await activate_stage_automatically(stage, session, reason)
     finally:
         await session.close()
@@ -2800,31 +3153,33 @@ async def auto_activate_stage(stage_id: str):
     """
     logging.info(f"Автоматическая активация этапа {stage_id} по расписанию")
     session: AsyncSession = await anext(get_session())
-    
+
     try:
         # Получаем этап
         stage_query = select(Stage).where(Stage.id == stage_id)
         stage_result = await session.execute(stage_query)
         stage = stage_result.scalar_one_or_none()
-        
+
         if not stage:
             logging.error(f"Этап {stage_id} не найден")
             return
-        
+
         # Проверяем, что этап еще не активирован
         if stage.is_active:
             logging.info(f"Этап {stage_id} уже активен, пропускаем активацию")
             return
-        
+
         # Активируем этап
         await activate_stage_automatically(stage, session, "по расписанию")
-        
+
         # Удаляем задачу из планировщика, так как этап уже активирован
         job_id = f"auto_activate_stage_{stage_id}"
         if scheduler.get_job(job_id):
             scheduler.remove_job(job_id)
-            logging.info(f"Задача автоматической активации {job_id} удалена из планировщика")
-        
+            logging.info(
+                f"Задача автоматической активации {job_id} удалена из планировщика"
+            )
+
     except Exception as e:
         logging.error(f"Ошибка при автоматической активации этапа {stage_id}: {str(e)}")
         await session.rollback()
@@ -2839,62 +3194,82 @@ async def check_and_schedule_auto_activate_stages():
     """
     logging.info("=== Начало проверки этапов для автоматической активации ===")
     session: AsyncSession = await anext(get_session())
-    
+
     try:
         from src.utils.event_utils import get_active_event
+
         try:
             active_event = await get_active_event(session)
             logging.info(f"Активное событие: {active_event.id} ({active_event.name})")
         except Exception as e:
-            logging.warning(f"Активное событие не найдено, пропускаем планирование: {e}")
+            logging.warning(
+                f"Активное событие не найдено, пропускаем планирование: {e}"
+            )
             return
-        
+
         # Получаем все этапы с автоматической активацией для активного события
         stages_query = select(Stage).where(
             Stage.event_id == active_event.id,
             Stage.is_auto_activate == True,
             Stage.auto_activate_at.isnot(None),
-            Stage.is_active == False  # Только неактивные этапы
+            Stage.is_active == False,  # Только неактивные этапы
         )
         stages_result = await session.execute(stages_query)
         stages = stages_result.scalars().all()
-        
+        desired_job_ids = {f"auto_activate_stage_{stage.id}" for stage in stages}
+
         logging.info(f"Найдено этапов с автоматической активацией: {len(stages)}")
-        
+
         current_time = datetime.now(pytz.UTC)
         logging.info(f"Текущее время (UTC): {current_time}")
-        
+
+        all_jobs = scheduler.get_jobs()
+        auto_activate_jobs = [
+            job for job in all_jobs if job.id.startswith("auto_activate_stage_")
+        ]
+
+        for job in auto_activate_jobs:
+            if job.id not in desired_job_ids:
+                scheduler.remove_job(job.id)
+                logging.info(
+                    f"Удалена устаревшая задача автоматической активации: {job.id}"
+                )
+
         for stage in stages:
             job_id = f"auto_activate_stage_{stage.id}"
-            
+
             logging.info(
                 f"Этап '{stage.name}' (ID: {stage.id}): "
                 f"is_auto_activate={stage.is_auto_activate}, "
                 f"auto_activate_at={stage.auto_activate_at} (UTC), "
                 f"is_active={stage.is_active}"
             )
-            
-            # Проверяем, не запланирована ли уже задача
+
             existing_job = scheduler.get_job(job_id)
-            if existing_job:
-                logging.info(f"Задача {job_id} уже запланирована на {existing_job.next_run_time}")
-                continue
-            
-            # Убеждаемся, что auto_activate_at имеет timezone
+
             if stage.auto_activate_at.tzinfo is None:
-                logging.warning(f"Время активации этапа {stage.id} не имеет timezone, предполагаем UTC")
+                logging.warning(
+                    f"Время активации этапа {stage.id} не имеет timezone, предполагаем UTC"
+                )
                 stage.auto_activate_at = pytz.UTC.localize(stage.auto_activate_at)
-            
+
             # Проверяем, не прошло ли уже время активации
             time_diff = (stage.auto_activate_at - current_time).total_seconds()
-            logging.info(f"Разница времени до активации: {time_diff} секунд ({time_diff/60:.1f} минут)")
-            
+            logging.info(
+                f"Разница времени до активации: {time_diff} секунд ({time_diff / 60:.1f} минут)"
+            )
+
             if stage.auto_activate_at <= current_time:
-                # Время уже прошло, активируем немедленно
-                logging.info(f"Время активации этапа {stage.id} уже прошло, активируем немедленно")
+                if existing_job:
+                    scheduler.remove_job(job_id)
+                    logging.info(
+                        f"Удалена существующая задача {job_id} перед немедленной активацией"
+                    )
+                logging.info(
+                    f"Время активации этапа {stage.id} уже прошло, активируем немедленно"
+                )
                 await auto_activate_stage(str(stage.id))
             else:
-                # Планируем активацию на указанное время
                 logging.info(
                     f"Планирование автоматической активации этапа '{stage.name}' (ID: {stage.id}) "
                     f"на {stage.auto_activate_at} (UTC)"
@@ -2906,27 +3281,37 @@ async def check_and_schedule_auto_activate_stages():
                         id=job_id,
                         name=f"Auto activate stage {stage.name}",
                         args=[str(stage.id)],
-                        replace_existing=True
+                        replace_existing=True,
                     )
                     scheduled_job = scheduler.get_job(job_id)
                     if scheduled_job:
-                        logging.info(f"Задача успешно запланирована. Следующий запуск: {scheduled_job.next_run_time}")
+                        logging.info(
+                            f"Задача успешно запланирована. Следующий запуск: {scheduled_job.next_run_time}"
+                        )
                     else:
                         logging.error(f"Задача не была добавлена в планировщик!")
                 except Exception as e:
                     logging.error(f"Ошибка при добавлении задачи в планировщик: {e}")
-        
-        # Показываем все запланированные задачи
+
         all_jobs = scheduler.get_jobs()
-        auto_activate_jobs = [job for job in all_jobs if job.id.startswith('auto_activate_stage_')]
-        logging.info(f"Всего запланировано задач автоматической активации: {len(auto_activate_jobs)}")
+        auto_activate_jobs = [
+            job for job in all_jobs if job.id.startswith("auto_activate_stage_")
+        ]
+        logging.info(
+            f"Всего запланировано задач автоматической активации: {len(auto_activate_jobs)}"
+        )
         for job in auto_activate_jobs:
-            logging.info(f"  - {job.id}: {job.name}, следующий запуск: {job.next_run_time}")
-        
+            logging.info(
+                f"  - {job.id}: {job.name}, следующий запуск: {job.next_run_time}"
+            )
+
         logging.info("=== Конец проверки этапов для автоматической активации ===")
-        
+
     except Exception as e:
-        logging.error(f"Ошибка при планировании автоматической активации этапов: {str(e)}", exc_info=True)
+        logging.error(
+            f"Ошибка при планировании автоматической активации этапов: {str(e)}",
+            exc_info=True,
+        )
     finally:
         await session.close()
 
@@ -2937,45 +3322,46 @@ async def check_conditional_auto_activate_stages(session: AsyncSession):
     """
     from src.utils.event_utils import get_active_event
     from src.utils.team_utils import check_active_teams
-    
+
     try:
         active_event = await get_active_event(session)
     except Exception:
         logging.warning("Активное событие не найдено, пропускаем проверку условий")
         return
-    
+
     # Проверяем registration_closed - активируется при достижении 20 активных команд
     current_stage_query = select(Stage).where(
-        Stage.is_active == True,
-        Stage.event_id == active_event.id
+        Stage.is_active == True, Stage.event_id == active_event.id
     )
     current_stage_result = await session.execute(current_stage_query)
     current_stage = current_stage_result.scalar_one_or_none()
-    
+
     # Если текущий этап - регистрация, проверяем условие для registration_closed
     if current_stage and current_stage.type == StageType.REGISTRATION.value:
         active_teams = await check_active_teams(session)
         active_teams_count = len(active_teams)
-        
+
         if active_teams_count >= 20:
             # Ищем этап registration_closed
             registration_closed_query = select(Stage).where(
                 Stage.type == StageType.REGISTRATION_CLOSED.value,
                 Stage.event_id == active_event.id,
-                Stage.is_active == False
+                Stage.is_active == False,
             )
-            registration_closed_result = await session.execute(registration_closed_query)
+            registration_closed_result = await session.execute(
+                registration_closed_query
+            )
             registration_closed_stage = registration_closed_result.scalar_one_or_none()
-            
+
             if registration_closed_stage:
                 logging.info(
                     f"Условие выполнено: {active_teams_count} активных команд >= 20. "
                     f"Активируем этап '{registration_closed_stage.name}'"
                 )
                 await activate_stage_automatically(
-                    registration_closed_stage, 
-                    session, 
-                    "при достижении лимита команд (20)"
+                    registration_closed_stage,
+                    session,
+                    "при достижении лимита команд (20)",
                 )
 
 
@@ -2987,17 +3373,20 @@ async def periodic_check_auto_activate_stages():
     2. Этапы с активацией по условиям (например, registration_closed)
     """
     session: AsyncSession = await anext(get_session())
-    
+
     try:
         # Проверяем этапы с активацией по времени
         await check_and_schedule_auto_activate_stages()
-        
+
         # Проверяем этапы с активацией по условиям
         await check_conditional_auto_activate_stages(session)
     except Exception as e:
-        logging.error(f"Ошибка при периодической проверке автоматической активации: {str(e)}")
+        logging.error(
+            f"Ошибка при периодической проверке автоматической активации: {str(e)}"
+        )
     finally:
         await session.close()
+
 
 # scheduler.add_job(
 #     check_time_and_start_hackathon,
@@ -3027,6 +3416,11 @@ async def periodic_check_auto_activate_stages():
 # )
 
 logging.info(
-    f"Scheduled hackathon start check job. Целевая дата: {hackathon_start_date}, первая проверка в {next_minute}")
-logging.info(f"Scheduled solution submission check job. Целевая дата: {solution_submission_date}")
-logging.info(f"Scheduled solution review check job. Целевая дата: {solution_review_date}")
+    f"Scheduled hackathon start check job. Целевая дата: {hackathon_start_date}, первая проверка в {next_minute}"
+)
+logging.info(
+    f"Scheduled solution submission check job. Целевая дата: {solution_submission_date}"
+)
+logging.info(
+    f"Scheduled solution review check job. Целевая дата: {solution_review_date}"
+)

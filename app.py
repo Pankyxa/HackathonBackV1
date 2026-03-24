@@ -5,29 +5,35 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.db import engine
 from src.init_db import init_models
-from src.routers import auth_router, teams_router, users_router, files_router, stages_router, evaluations_router, events_router
-from src.utils.background_tasks import scheduler, check_and_schedule_auto_activate_stages, periodic_check_auto_activate_stages
+from src.routers import (
+    auth_router,
+    teams_router,
+    users_router,
+    files_router,
+    stages_router,
+    evaluations_router,
+    events_router,
+)
+from src.utils.background_tasks import (
+    scheduler,
+    check_and_schedule_auto_activate_stages,
+    periodic_check_auto_activate_stages,
+)
 from src.utils.enum_utils import initialize_enum_data
 from src.utils.router_states import initialize_router_states
 
 app = FastAPI(
-    title="Хакатон API",
-    description="Здесь находится API для хакатона",
-    version="1.0.0"
+    title="Хакатон API", description="Здесь находится API для хакатона", version="1.0.0"
 )
 
 # Настройка CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://hackathon.tyuiu.ru",
-        "http://localhost:5173",
-        "http://localhost:5174"
-    ],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["Content-Length", "Content-Range"]
+    expose_headers=["Content-Length", "Content-Range", "Content-Disposition"],
 )
 app.include_router(auth_router)
 app.include_router(teams_router)
@@ -36,6 +42,7 @@ app.include_router(files_router)
 app.include_router(stages_router)
 app.include_router(evaluations_router)
 app.include_router(events_router)
+
 
 @app.on_event("startup")
 async def startup_event():
@@ -49,13 +56,15 @@ async def startup_event():
     await check_and_schedule_auto_activate_stages()
     # Добавляем периодическую проверку (каждую минуту)
     from apscheduler.triggers.interval import IntervalTrigger
+
     scheduler.add_job(
         periodic_check_auto_activate_stages,
         trigger=IntervalTrigger(minutes=1),
-        id='periodic_check_auto_activate_stages',
-        name='Periodic check for auto-activate stages',
-        replace_existing=True
+        id="periodic_check_auto_activate_stages",
+        name="Periodic check for auto-activate stages",
+        replace_existing=True,
     )
+
 
 def custom_openapi():
     if app.openapi_schema:
@@ -73,7 +82,7 @@ def custom_openapi():
             "type": "http",
             "scheme": "bearer",
             "bearerFormat": "JWT",
-            "description": "Enter your bearer token in the format **Bearer &lt;token&gt;**"
+            "description": "Enter your bearer token in the format **Bearer &lt;token&gt;**",
         }
     }
 
