@@ -10,18 +10,24 @@ from src.db import Base
 from . import File, TeamMemberStatus, UserStatus, TeamRole
 
 
+PARTICIPATION_OVERRIDE_TEAM_IDS = {uuid.UUID("d14c42d3-25ef-4637-9d07-1df9ad67d0e4")}
+
+
 class Team(Base):
     """Модель команды"""
-    __tablename__ = 'teams'
+
+    __tablename__ = "teams"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     team_name = Column(String(255), nullable=False)
     team_motto = Column(String(255), nullable=False)
-    team_leader_id = Column(UUID(as_uuid=True), ForeignKey('users.id'), nullable=False)
-    logo_file_id = Column(UUID(as_uuid=True), ForeignKey('files.id'), nullable=True)
+    team_leader_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    logo_file_id = Column(UUID(as_uuid=True), ForeignKey("files.id"), nullable=True)
     solution_link = Column(String(1024), nullable=True)
-    event_id = Column(UUID(as_uuid=True), ForeignKey('events.id'), nullable=False)
-    is_finalist = Column(Boolean, default=False, nullable=False)  # Является ли команда финалистом
+    event_id = Column(UUID(as_uuid=True), ForeignKey("events.id"), nullable=False)
+    is_finalist = Column(
+        Boolean, default=False, nullable=False
+    )  # Является ли команда финалистом
 
     # Relationships
     team_leader = relationship("User", back_populates="teams_as_leader")
@@ -34,10 +40,12 @@ class Team(Base):
         """Получение списка принятых участников команды"""
         try:
             return [
-                member for member in self.members
-                if hasattr(member, 'status') and member.status and 
-                   hasattr(member.status, 'name') and 
-                   member.status.name == TeamMemberStatus.ACCEPTED.value
+                member
+                for member in self.members
+                if hasattr(member, "status")
+                and member.status
+                and hasattr(member.status, "name")
+                and member.status.name == TeamMemberStatus.ACCEPTED.value
             ]
         except Exception:
             # Если произошла ошибка при доступе к данным (например, lazy loading),
@@ -49,9 +57,12 @@ class Team(Base):
         try:
             active_members = self.get_active_members()
             for member in active_members:
-                if (hasattr(member, 'role') and member.role and 
-                    hasattr(member.role, 'name') and 
-                    member.role.name == TeamRole.MENTOR.value):
+                if (
+                    hasattr(member, "role")
+                    and member.role
+                    and hasattr(member.role, "name")
+                    and member.role.name == TeamRole.MENTOR.value
+                ):
                     return member
             return None
         except Exception:
@@ -62,9 +73,12 @@ class Team(Base):
         try:
             active_members = self.get_active_members()
             for member in active_members:
-                if (hasattr(member, 'role') and member.role and 
-                    hasattr(member.role, 'name') and 
-                    member.role.name == TeamRole.TEAMLEAD.value):
+                if (
+                    hasattr(member, "role")
+                    and member.role
+                    and hasattr(member.role, "name")
+                    and member.role.name == TeamRole.TEAMLEAD.value
+                ):
                     return member
             return None
         except Exception:
@@ -75,24 +89,37 @@ class Team(Base):
         try:
             active_members = self.get_active_members()
             return [
-                member for member in active_members
-                if (hasattr(member, 'role') and member.role and 
-                    hasattr(member.role, 'name') and 
-                    member.role.name == TeamRole.MEMBER.value)
+                member
+                for member in active_members
+                if (
+                    hasattr(member, "role")
+                    and member.role
+                    and hasattr(member.role, "name")
+                    and member.role.name == TeamRole.MEMBER.value
+                )
             ]
         except Exception:
             return []
+
+    def has_participation_override(self) -> bool:
+        return self.id in PARTICIPATION_OVERRIDE_TEAM_IDS
+
+    def get_required_regular_members_count(self) -> int:
+        if self.has_participation_override():
+            return 3
+        return 4
 
     def get_status(self) -> str:
         """Вычисляемый статус команды"""
         mentor = self.get_mentor()
         team_leader = self.get_team_leader_member()
         regular_members = self.get_regular_members()
+        required_regular_members = self.get_required_regular_members_count()
 
         if not mentor or not team_leader:
             return "incomplete"
 
-        if len(regular_members) != 4:
+        if len(regular_members) != required_regular_members:
             return "incomplete"
 
         all_approved = True
@@ -127,11 +154,13 @@ class Team(Base):
 
     def can_participate(self) -> bool:
         """Проверка возможности участия команды"""
+        required_regular_members = self.get_required_regular_members_count()
+
         return (
-            self.get_status() == "active" and
-            len(self.get_regular_members()) == 4 and
-            self.get_team_leader_member() is not None and
-            self.get_mentor() is not None
+            self.get_status() == "active"
+            and len(self.get_regular_members()) == required_regular_members
+            and self.get_team_leader_member() is not None
+            and self.get_mentor() is not None
         )
 
     def get_status_details(self) -> dict:
@@ -148,27 +177,41 @@ class Team(Base):
             "has_mentor": mentor is not None,
             "mentor_status": mentor.user.current_status.name if mentor else None,
             "has_team_leader": team_leader is not None,
-            "team_leader_status": team_leader.user.current_status.name if team_leader else None,
+            "team_leader_status": team_leader.user.current_status.name
+            if team_leader
+            else None,
             "members_status": {
-                "approved": sum(1 for m in regular_members
-                              if m.user.current_status.name == UserStatus.APPROVED.value),
-                "pending": sum(1 for m in regular_members
-                             if m.user.current_status.name == UserStatus.PENDING.value),
-                "need_update": sum(1 for m in regular_members
-                                 if m.user.current_status.name == UserStatus.NEED_UPDATE.value)
-            }
+                "approved": sum(
+                    1
+                    for m in regular_members
+                    if m.user.current_status.name == UserStatus.APPROVED.value
+                ),
+                "pending": sum(
+                    1
+                    for m in regular_members
+                    if m.user.current_status.name == UserStatus.PENDING.value
+                ),
+                "need_update": sum(
+                    1
+                    for m in regular_members
+                    if m.user.current_status.name == UserStatus.NEED_UPDATE.value
+                ),
+            },
         }
 
 
 class TeamMember(Base):
     """Модель участника команды"""
-    __tablename__ = 'team_members'
+
+    __tablename__ = "team_members"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    team_id = Column(UUID(as_uuid=True), ForeignKey('teams.id'), nullable=False)
-    user_id = Column(UUID(as_uuid=True), ForeignKey('users.id'), nullable=False)
-    role_id = Column(UUID(as_uuid=True), ForeignKey('team_roles.id'), nullable=False)
-    status_id = Column(UUID(as_uuid=True), ForeignKey('team_member_statuses.id'), nullable=False)
+    team_id = Column(UUID(as_uuid=True), ForeignKey("teams.id"), nullable=False)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    role_id = Column(UUID(as_uuid=True), ForeignKey("team_roles.id"), nullable=False)
+    status_id = Column(
+        UUID(as_uuid=True), ForeignKey("team_member_statuses.id"), nullable=False
+    )
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at = Column(DateTime(timezone=True), onupdate=datetime.utcnow)
 
