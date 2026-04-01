@@ -1403,7 +1403,7 @@ async def send_hackathon_opening_notification(session: AsyncSession):
                                                 </tr>
                                                 <tr>
                                                     <td align="center" style="padding: 0 0 20px 0;">
-                                                        <p style="margin: 0;">Приглашаем вас на онлайн-открытие хакатона, которое состоится завтра, <strong>9 апреля, в 9:00 по Московскому времени</strong>.</p>
+                                                        <p style="margin: 0;">Приглашаем вас на открытие Хакатона, которое состоится <strong>01.04.2026 в 09:00 (МСК)</strong>. Подключиться к трансляции можно по ссылке ниже.</p>
                                                     </td>
                                                 </tr>
                                                 <tr>
@@ -1411,7 +1411,7 @@ async def send_hackathon_opening_notification(session: AsyncSession):
                                                         <table border="0" cellpadding="0" cellspacing="0">
                                                             <tr>
                                                                 <td align="center" bgcolor="#2196F3" style="border-radius: 4px;">
-                                                                    <a href="https://bigbb2.tyuiu.ru/b/hyc-sjb-5lk-prq" 
+                                                                    <a href="https://bigbb2.tyuiu.ru/b/zah-tka-oxi-n4i" 
                                                                        style="display: inline-block; padding: 12px 24px; color: #ffffff; text-decoration: none; font-weight: bold;">
                                                                         Присоединиться к открытию
                                                                     </a>
@@ -1422,7 +1422,7 @@ async def send_hackathon_opening_notification(session: AsyncSession):
                                                 </tr>
                                                 <tr>
                                                     <td align="center" style="padding: 0 0 20px 0;">
-                                                        <p style="margin: 0;">Или перейдите по ссылке: <a href="https://bigbb2.tyuiu.ru/b/hyc-sjb-5lk-prq" style="color: #2196F3;">https://bigbb2.tyuiu.ru/b/hyc-sjb-5lk-prq</a></p>
+                                                        <p style="margin: 0;">Или перейдите по ссылке: <a href="https://bigbb2.tyuiu.ru/b/zah-tka-oxi-n4i" style="color: #2196F3;">https://bigbb2.tyuiu.ru/b/zah-tka-oxi-n4i</a></p>
                                                     </td>
                                                 </tr>
                                                 <tr>
