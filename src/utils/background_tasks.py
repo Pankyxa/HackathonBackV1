@@ -2650,6 +2650,155 @@ async def send_closing_ceremony_notification(session: AsyncSession):
     """)
 
 
+async def send_first_stage_results_notification(session: AsyncSession):
+    from src.utils.event_utils import get_active_event
+
+    try:
+        active_event = await get_active_event(session)
+    except Exception:
+        logging.warning(
+            "Активное событие не найдено, пропускаем рассылку о результатах первого этапа"
+        )
+        return
+
+    teams_query = (
+        select(Team)
+        .where(Team.event_id == active_event.id)
+        .options(
+            selectinload(Team.members)
+            .selectinload(TeamMember.user)
+            .selectinload(User.current_status),
+            selectinload(Team.members).selectinload(TeamMember.role),
+            selectinload(Team.members).selectinload(TeamMember.status),
+        )
+    )
+    result = await session.execute(teams_query)
+    teams = result.scalars().all()
+
+    active_teams = [team for team in teams if team.get_status() == "active"]
+    total_teams = len(active_teams)
+    successful_sends = 0
+    failed_sends = 0
+
+    logging.info(
+        f"Начало рассылки уведомлений о результатах первого этапа. Всего команд: {total_teams}"
+    )
+    start_time = datetime.now()
+
+    for i, team in enumerate(active_teams, 1):
+        team_members = [
+            member.user
+            for member in team.members
+            if member.status_id == team_router_state.accepted_status_id
+        ]
+
+        for member in team_members:
+            html_content = f"""
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta charset="utf-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            </head>
+            <body style="margin: 0; padding: 0; background-color: #f5f5f5;">
+                <table border="0" cellpadding="0" cellspacing="0" width="100%" style="font-family: Arial, sans-serif;">
+                    <tr>
+                        <td align="center" style="padding: 20px 0;">
+                            <table border="0" cellpadding="0" cellspacing="0" width="600" style="background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);">
+                                <tr>
+                                    <td align="center" style="padding: 40px 30px;">
+                                        <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin-bottom: 30px;">
+                                            <tr>
+                                                <td align="center">
+                                                    <h1 style="color: #2196F3; font-size: 24px; margin: 0;">Первый этап завершен</h1>
+                                                </td>
+                                            </tr>
+                                        </table>
+                                        <table border="0" cellpadding="0" cellspacing="0" width="100%">
+                                            <tr>
+                                                <td align="center" style="padding: 0 0 20px 0;">
+                                                    <p style="margin: 0;">Здравствуйте, {member.full_name}!</p>
+                                                </td>
+                                            </tr>
+                                            <tr>
+                                                <td align="center" style="padding: 0 0 20px 0;">
+                                                    <p style="margin: 0;">Первый этап Хакатона завершен. Если вы не участвовали в онлайн-закрытии, вы можете ознакомиться с результатами и списком финалистов на главной странице сайта.</p>
+                                                </td>
+                                            </tr>
+                                            <tr>
+                                                <td align="center" style="padding: 20px 0;">
+                                                    <table border="0" cellpadding="0" cellspacing="0">
+                                                        <tr>
+                                                            <td align="center" bgcolor="#2196F3" style="border-radius: 4px;">
+                                                                <a href="{settings.base_url}" 
+                                                                   style="display: inline-block; padding: 12px 24px; color: #ffffff; text-decoration: none; font-weight: bold;">
+                                                                    Перейти на главную страницу
+                                                                </a>
+                                                            </td>
+                                                        </tr>
+                                                    </table>
+                                                </td>
+                                            </tr>
+                                            <tr>
+                                                <td align="center" style="padding: 0 0 20px 0;">
+                                                    <p style="margin: 0;">Команда: {team.team_name}</p>
+                                                </td>
+                                            </tr>
+                                        </table>
+                                        <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin-top: 30px;">
+                                            <tr>
+                                                <td align="center" style="color: #666666; font-size: 14px;">
+                                                    <p style="margin: 0;">Это автоматическое уведомление, пожалуйста, не отвечайте на него.</p>
+                                                </td>
+                                            </tr>
+                                        </table>
+                                    </td>
+                                </tr>
+                            </table>
+                        </td>
+                    </tr>
+                </table>
+            </body>
+            </html>
+            """
+
+            try:
+                success = await send_email_async(
+                    to_email=member.email,
+                    subject="Результаты первого этапа Хакатона",
+                    body=html_content,
+                    is_html=True,
+                )
+                if success:
+                    successful_sends += 1
+                    logging.info(
+                        f"[Команда {i}/{total_teams}] Отправлено уведомление участнику {member.full_name} ({member.email})"
+                    )
+                else:
+                    failed_sends += 1
+                    logging.error(
+                        f"[Команда {i}/{total_teams}] Ошибка отправки участнику {member.full_name} ({member.email})"
+                    )
+            except Exception as e:
+                failed_sends += 1
+                logging.error(
+                    f"[Команда {i}/{total_teams}] Исключение при отправке участнику {member.full_name} ({member.email}): {str(e)}"
+                )
+
+            await asyncio.sleep(2)
+
+    end_time = datetime.now()
+    duration = (end_time - start_time).total_seconds()
+
+    logging.info(f"""
+    Рассылка уведомлений о результатах первого этапа завершена!
+    Время выполнения: {duration:.2f} секунд
+    Всего команд: {total_teams}
+    Успешно отправлено: {successful_sends}
+    Ошибок отправки: {failed_sends}
+    """)
+
+
 async def check_and_start_hackathon():
     """
     Меняет stage на task_distribution (3 этап) и отправляет уведомления
