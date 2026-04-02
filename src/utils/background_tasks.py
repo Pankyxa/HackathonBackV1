@@ -2499,16 +2499,13 @@ async def send_defense_schedule_notification(session: AsyncSession):
 
 
 async def send_closing_ceremony_notification(session: AsyncSession):
-    """
-    Отправляет уведомление о торжественном закрытии хакатона всем активным командам активного события
-    """
     from src.utils.event_utils import get_active_event
 
     try:
         active_event = await get_active_event(session)
     except Exception:
         logging.warning(
-            "Активное событие не найдено, пропускаем рассылку о торжественном закрытии"
+            "Активное событие не найдено, пропускаем рассылку о торжественном закрытии первого этапа"
         )
         return
 
@@ -2532,7 +2529,7 @@ async def send_closing_ceremony_notification(session: AsyncSession):
     failed_sends = 0
 
     logging.info(
-        f"Начало рассылки уведомлений о торжественном закрытии. Всего команд: {total_teams}"
+        f"Начало рассылки уведомлений о торжественном закрытии первого этапа. Всего команд: {total_teams}"
     )
     start_time = datetime.now()
 
@@ -2562,7 +2559,7 @@ async def send_closing_ceremony_notification(session: AsyncSession):
                                         <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin-bottom: 30px;">
                                             <tr>
                                                 <td align="center">
-                                                    <h1 style="color: #2196F3; font-size: 24px; margin: 0;">Торжественное закрытие хакатона</h1>
+                                                    <h1 style="color: #2196F3; font-size: 24px; margin: 0;">Торжественное закрытие первого этапа</h1>
                                                 </td>
                                             </tr>
                                         </table>
@@ -2575,7 +2572,7 @@ async def send_closing_ceremony_notification(session: AsyncSession):
                                             </tr>
                                             <tr>
                                                 <td align="center" style="padding: 0 0 20px 0;">
-                                                    <p style="margin: 0;">Приглашаем вас принять участие в торжественном закрытии хакатона, которое состоится сегодня в <strong>14:00 (Мск)</strong>.</p>
+                                                    <p style="margin: 0;">Приглашаем вас принять участие в торжественном закрытии первого этапа. В рамках церемонии будут объявлены финалисты первого этапа. Подключиться к трансляции можно по ссылке ниже.</p>
                                                 </td>
                                             </tr>
                                             <tr>
@@ -2583,9 +2580,9 @@ async def send_closing_ceremony_notification(session: AsyncSession):
                                                     <table border="0" cellpadding="0" cellspacing="0">
                                                         <tr>
                                                             <td align="center" bgcolor="#2196F3" style="border-radius: 4px;">
-                                                                <a href="https://bigbb2.tyuiu.ru/b/hyc-sjb-5lk-prq" 
+                                                                <a href="https://bigbb2.tyuiu.ru/b/zah-tka-oxi-n4i" 
                                                                    style="display: inline-block; padding: 12px 24px; color: #ffffff; text-decoration: none; font-weight: bold;">
-                                                                    Присоединиться к церемонии закрытия
+                                                                    Присоединиться к закрытию первого этапа
                                                                 </a>
                                                             </td>
                                                         </tr>
@@ -2619,7 +2616,7 @@ async def send_closing_ceremony_notification(session: AsyncSession):
             try:
                 success = await send_email_async(
                     to_email=member.email,
-                    subject="Торжественное закрытие хакатона",
+                    subject="Торжественное закрытие первого этапа",
                     body=html_content,
                     is_html=True,
                 )
@@ -2645,7 +2642,7 @@ async def send_closing_ceremony_notification(session: AsyncSession):
     duration = (end_time - start_time).total_seconds()
 
     logging.info(f"""
-    Рассылка уведомлений о торжественном закрытии завершена!
+    Рассылка уведомлений о торжественном закрытии первого этапа завершена!
     Время выполнения: {duration:.2f} секунд
     Всего команд: {total_teams}
     Успешно отправлено: {successful_sends}
