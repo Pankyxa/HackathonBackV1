@@ -3208,11 +3208,15 @@ async def check_and_schedule_auto_activate_stages():
             return
 
         # Получаем все этапы с автоматической активацией для активного события
-        stages_query = select(Stage).where(
-            Stage.event_id == active_event.id,
-            Stage.is_auto_activate == True,
-            Stage.auto_activate_at.isnot(None),
-            Stage.is_active == False,  # Только неактивные этапы
+        stages_query = (
+            select(Stage)
+            .where(
+                Stage.event_id == active_event.id,
+                Stage.is_auto_activate == True,
+                Stage.auto_activate_at.isnot(None),
+                Stage.is_active == False,  # Только неактивные этапы
+            )
+            .order_by(Stage.auto_activate_at.asc(), Stage.order.asc())
         )
         stages_result = await session.execute(stages_query)
         stages = stages_result.scalars().all()
