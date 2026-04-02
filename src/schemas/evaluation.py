@@ -6,15 +6,25 @@ from pydantic import BaseModel, Field
 
 class TeamEvaluationBase(BaseModel):
     """Базовая схема оценки команды"""
-    criterion_1: int = Field(..., ge=0, le=10, description="Соответствие результата поставленной задаче")
-    criterion_2: int = Field(..., ge=0, le=10, description="Корректность, оригинальность и инновационность")
-    criterion_3: int = Field(..., ge=0, le=10, description="Проработанность технического решения")
-    criterion_4: int = Field(..., ge=0, le=10, description="Эффективность предложенного решения")
+
+    criterion_1: int = Field(
+        ..., ge=0, le=10, description="Соответствие результата поставленной задаче"
+    )
+    criterion_2: int = Field(
+        ..., ge=0, le=10, description="Корректность, оригинальность и инновационность"
+    )
+    criterion_3: int = Field(
+        ..., ge=0, le=10, description="Проработанность технического решения"
+    )
+    criterion_4: int = Field(
+        ..., ge=0, le=10, description="Эффективность предложенного решения"
+    )
     criterion_5: int = Field(..., ge=0, le=10, description="Качество выступления")
 
 
 class TeamEvaluationCreate(TeamEvaluationBase):
     team_id: UUID
+    judge_id: Optional[UUID] = None
 
 
 class TeamEvaluationResponse(TeamEvaluationBase):
@@ -35,6 +45,7 @@ class TeamEvaluationResponse(TeamEvaluationBase):
 
 class TeamTotalScore(BaseModel):
     """Схема для отображения итоговых результатов команды"""
+
     team_id: UUID
     team_name: str
     team_motto: str
