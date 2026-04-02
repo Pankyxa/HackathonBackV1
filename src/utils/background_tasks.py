@@ -2351,12 +2351,33 @@ async def send_defense_schedule_notification(session: AsyncSession):
     )
     start_time = datetime.now()
 
+    defense_schedule = {
+        "Двойной удар": "09:00",
+        "WattNot": "09:15",
+        "Заземленные": "09:30",
+        "Команда ЮГУ": "09:45",
+        "ЭнергоТек": "10:00",
+        "Шнур питания не найден": "10:15",
+        "поБЕДА": "10:30",
+        "исТок": "10:45",
+        "МПК ТИУ": "11:30",
+        "Шалуны Джоуля": "11:45",
+        "Русы": "12:00",
+    }
+
     for i, team in enumerate(active_teams, 1):
         team_members = [
             member.user
             for member in team.members
             if member.status_id == team_router_state.accepted_status_id
         ]
+
+        team_defense_time = defense_schedule.get(team.team_name)
+        defense_time_message = (
+            f"Время защиты вашей команды по Москве: <strong>{team_defense_time}</strong>. "
+            if team_defense_time
+            else ""
+        )
 
         for member in team_members:
             html_content = f"""
@@ -2391,14 +2412,13 @@ async def send_defense_schedule_notification(session: AsyncSession):
                                                 </tr>
                                                 <tr>
                                                     <td align="center" style="padding: 0 0 20px 0;">
-                                                        <p style="margin: 0;">Просим подключиться в <strong>8:30 (Мск) 11.04.25</strong> для проверки связи.</p>
+                                                        <p style="margin: 0;">Опубликован список защит проектов. {defense_time_message}В зависимости от вашего времени защиты присоединяйтесь по ссылке ниже.</p>
                                                     </td>
                                                 </tr>
                                                 <tr>
                                                     <td align="center" style="padding: 0 0 20px 0;">
-                                                        <p style="margin: 0;">Во время защиты необходимо продемонстрировать работу своей программы. В докладе перечислить результаты моделирования.</p>
-                                                        <p style="margin: 10px 0 0 0;">BigBlueButton позволяет осуществлять демонстрацию экрана.</p>
-                                                        <p style="margin: 10px 0 0 0;"><strong>Продолжительность доклада не более 5 минут.</strong></p>
+                                                        <p style="margin: 0;">Во время защиты необходимо продемонстрировать работу своей программы. В докладе перечислите результаты моделирования.</p>
+                                                        <p style="margin: 10px 0 0 0;">Список защит опубликован на главной странице сайта.</p>
                                                         <p style="margin: 10px 0 0 0;"><strong>График защит представлен на главной странице сайта.</strong></p>
                                                     </td>
                                                 </tr>
@@ -2407,7 +2427,7 @@ async def send_defense_schedule_notification(session: AsyncSession):
                                                         <table border="0" cellpadding="0" cellspacing="0">
                                                             <tr>
                                                                 <td align="center" bgcolor="#2196F3" style="border-radius: 4px;">
-                                                                    <a href="https://bigbb2.tyuiu.ru/b/hyc-sjb-5lk-prq" 
+                                                                    <a href="https://bigbb2.tyuiu.ru/b/zah-tka-oxi-n4i" 
                                                                        style="display: inline-block; padding: 12px 24px; color: #ffffff; text-decoration: none; font-weight: bold;">
                                                                         Присоединиться к защите
                                                                     </a>
@@ -2444,7 +2464,7 @@ async def send_defense_schedule_notification(session: AsyncSession):
             try:
                 success = await send_email_async(
                     to_email=member.email,
-                    subject="Защита проектов - Информация о подключении",
+                    subject="Опубликован список защит проектов",
                     body=html_content,
                     is_html=True,
                 )
