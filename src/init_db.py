@@ -1,7 +1,7 @@
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 from src.db import Base
-from src.models import User, File, Team, Role, TeamMember, UserStatusType, Stage
+from src.models import User, File, Team, Role, TeamMember, UserStatusType, Stage, Event
 from src.models.enum_tables import (
     TeamRoleTable,
     TeamMemberStatusTable,
@@ -155,6 +155,21 @@ async def init_models(engine: AsyncEngine):
                 )
                 session.add(new_owner_type)
 
+        existing_event = await session.execute(Event.__table__.select())
+        event_row = existing_event.first()
+        if event_row:
+            default_event_id = event_row.id
+        else:
+            default_event = Event(
+                id=uuid.uuid4(),
+                name="Хакатон",
+                description="Событие по умолчанию",
+                is_active=True,
+            )
+            session.add(default_event)
+            await session.flush()
+            default_event_id = default_event.id
+
         stages_data = [
             {
                 "id": uuid.uuid4(),
@@ -217,7 +232,8 @@ async def init_models(engine: AsyncEngine):
                     name=stage_data["name"],
                     type=stage_data["type"],
                     order=stage_data["order"],
-                    is_active=stage_data["is_active"]
+                    is_active=stage_data["is_active"],
+                    event_id=default_event_id,
                 )
                 session.add(stage)
 
