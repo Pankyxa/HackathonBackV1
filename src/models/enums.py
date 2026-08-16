@@ -62,6 +62,7 @@ class StageType(Enum):
     REMOTE_TASK_DISTRIBUTION = "remote_task_distribution"  # Заочный этап - распределение заданий
     REMOTE_SOLUTION_SUBMISSION = "remote_solution_submission"  # Заочный этап - прием решений
     REMOTE_SOLUTION_REVIEW = "remote_solution_review"  # Устаревший тип - не используется (оценка происходит на этапе ONLINE_DEFENSE)
+    REMOTE_ON_SITE_PREPARATION = "remote_on_site_preparation"  # Заочный этап - подготовка к очному этапу
     FINALISTS_SELECTION = "finalists_selection"  # Определение финалистов
     ON_SITE_TASK_DISTRIBUTION = "on_site_task_distribution"  # Очный этап - распределение заданий
     ON_SITE_SOLUTION_SUBMISSION = "on_site_solution_submission"  # Очный этап - прием решений

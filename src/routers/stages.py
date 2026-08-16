@@ -230,7 +230,10 @@ async def create_stage(
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
-    """Создание нового этапа для активного события (только для администраторов и организаторов)"""
+    """Создание нового этапа для активного события (только для администраторов и организаторов).
+
+    Если порядковый номер уже занят, этот и все последующие этапы сдвигаются на +1.
+    """
     if not await check_admin_or_organizer(current_user, session):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -239,15 +242,24 @@ async def create_stage(
 
     active_event = await get_active_event(session)
 
-    # Проверяем, что этап с таким order не существует
-    existing_stage_query = select(Stage).where(
+    existing_stage_query = select(Stage.id).where(
         Stage.event_id == active_event.id, Stage.order == stage_data.order
     )
     existing_stage = await session.execute(existing_stage_query)
     if existing_stage.scalar_one_or_none():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Этап с порядковым номером {stage_data.order} уже существует",
+        # Сначала сдвигаем на большой offset, чтобы не нарушить unique (event_id, order)
+        await session.execute(
+            update(Stage)
+            .where(Stage.event_id == active_event.id, Stage.order >= stage_data.order)
+            .values(order=Stage.order + 1000)
+        )
+        await session.execute(
+            update(Stage)
+            .where(
+                Stage.event_id == active_event.id,
+                Stage.order >= stage_data.order + 1000,
+            )
+            .values(order=Stage.order - 999)
         )
 
     new_stage = Stage(
@@ -264,6 +276,7 @@ async def create_stage(
     session.add(new_stage)
     await session.commit()
     await session.refresh(new_stage)
+    await stage_router_state.initialize(session)
 
     # Если этап с автоматической активацией, планируем его активацию
     if new_stage.is_auto_activate and new_stage.auto_activate_at:

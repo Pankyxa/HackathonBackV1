@@ -21,6 +21,7 @@ from src.schemas.event import (
 )
 from src.auth.jwt import get_current_user
 from src.utils.router_states import user_router_state, team_router_state
+from src.utils.vuz_utils import vuz_list_from_team_members
 
 router = APIRouter(prefix="/events", tags=["events"])
 
@@ -240,6 +241,11 @@ async def get_past_events_results(
         
         finalists_query = (
             select(Team)
+            .options(
+                selectinload(Team.members)
+                .selectinload(TeamMember.user)
+                .selectinload(User.participant_info),
+            )
             .where(
                 Team.event_id == event.id,
                 Team.is_finalist == True
@@ -277,8 +283,26 @@ async def get_past_events_results(
                 "team": finalist.team_name,
                 "team_id": str(finalist.id),
                 "theme": finalist.team_motto or "",
-                "score": finalist_score
+                "score": finalist_score,
+                "vuz_list": vuz_list_from_team_members(finalist.members),
             })
+        
+        winner_ids = [team.team_id for team in top_teams]
+        winner_vuz_by_id = {}
+        if winner_ids:
+            winners_result = await session.execute(
+                select(Team)
+                .options(
+                    selectinload(Team.members)
+                    .selectinload(TeamMember.user)
+                    .selectinload(User.participant_info),
+                )
+                .where(Team.id.in_(winner_ids))
+            )
+            for winner_team in winners_result.scalars().all():
+                winner_vuz_by_id[winner_team.id] = vuz_list_from_team_members(
+                    winner_team.members
+                )
         
         # Добавляем результаты, если есть победители или финалисты
         if top_teams or finalists_list:
@@ -302,7 +326,8 @@ async def get_past_events_results(
                         "team": team.team_name,
                         "team_id": str(team.team_id),
                         "theme": team.team_motto or event.name,
-                        "score": float(team.total_score) if team.total_score else 0
+                        "score": float(team.total_score) if team.total_score else 0,
+                        "vuz_list": winner_vuz_by_id.get(team.team_id, []),
                     }
                     for i, team in enumerate(top_teams)
                 ],

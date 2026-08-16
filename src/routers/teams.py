@@ -86,6 +86,7 @@ from src.utils.router_states import (
 from src.utils.stage_checker import check_stage
 from src.utils.event_utils import get_active_event
 from src.utils.user_status_utils import update_team_members_statuses_for_event
+from src.utils.vuz_utils import unique_vuz_list
 
 router = APIRouter(prefix="/teams", tags=["teams"])
 
@@ -2801,7 +2802,7 @@ async def get_public_finalists(session: AsyncSession = Depends(get_session)):
             "team_motto": team.team_motto or "",
             "logo_file_id": str(team.logo_file_id) if team.logo_file_id else None,
             "members": members_info,
-            "vuz_list": list(vuz_list),
+            "vuz_list": unique_vuz_list(vuz_list),
             "total_score": total_score,
         }
 
@@ -2908,7 +2909,7 @@ async def get_judge_team_info(
         "solution_link": team.solution_link,
         "logo_file_id": str(team.logo_file_id) if team.logo_file_id else None,
         "members": members_info,
-        "vuz_list": list(vuz_list),
+        "vuz_list": unique_vuz_list(vuz_list),
     }
 
 
@@ -3026,6 +3027,6 @@ async def get_public_team_info(
         "team_motto": team.team_motto or "",
         "logo_file_id": str(team.logo_file_id) if team.logo_file_id else None,
         "members": members_info,
-        "vuz_list": list(vuz_list),
+        "vuz_list": unique_vuz_list(vuz_list),
         "total_score": total_score,
     }

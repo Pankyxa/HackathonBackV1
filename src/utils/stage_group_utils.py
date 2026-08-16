@@ -148,7 +148,10 @@ def get_stage_group_from_type(stage_type: str) -> str:
         return 'remote'
     
     # Финалисты
-    if stage_type == StageType.FINALISTS_SELECTION.value:
+    if stage_type in [
+        StageType.FINALISTS_SELECTION.value,
+        StageType.REMOTE_ON_SITE_PREPARATION.value,  # Пауза после финалистов, до очного этапа
+    ]:
         return 'final'
     
     # Очный этап
