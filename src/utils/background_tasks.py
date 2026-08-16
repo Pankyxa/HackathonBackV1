@@ -11,7 +11,6 @@ from apscheduler.triggers.interval import IntervalTrigger
 from sqlalchemy import select, and_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload, joinedload
-from websockets.asyncio.compatibility import anext
 
 from src.db import get_session
 from src.models import Team, TeamMember, User, Stage

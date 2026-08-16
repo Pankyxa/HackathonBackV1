@@ -87,6 +87,7 @@ from src.utils.stage_checker import check_stage
 from src.utils.event_utils import get_active_event
 from src.utils.user_status_utils import update_team_members_statuses_for_event
 from src.utils.vuz_utils import unique_vuz_list
+from src.utils.finalists_utils import is_effective_finalist, get_effective_finalist_ids
 
 router = APIRouter(prefix="/teams", tags=["teams"])
 
@@ -255,14 +256,7 @@ async def create_team(
     result = await session.execute(team_query)
     team_with_relations = result.scalar_one()
 
-    return TeamResponse(
-        id=team_with_relations.id,
-        team_name=team_with_relations.team_name,
-        team_motto=team_with_relations.team_motto,
-        team_leader_id=team_with_relations.team_leader_id,
-        logo_file_id=team_with_relations.logo_file_id,
-        status_details=TeamStatusDetails(**team_with_relations.get_status_details()),
-    )
+    return TeamResponse.from_orm_team(team_with_relations)
 
 
 @router.post("/{team_id}/mentor", response_model=TeamMemberResponse)
@@ -505,14 +499,7 @@ async def get_pending_invitations(
         await update_team_members_statuses_for_event(session, team, active_event.id)
         invitations.append(
             TeamInvitationResponse(
-                team=TeamResponse(
-                    id=team.id,
-                    team_name=team.team_name,
-                    team_motto=team.team_motto,
-                    team_leader_id=team.team_leader_id,
-                    logo_file_id=team.logo_file_id,
-                    status_details=TeamStatusDetails(**team.get_status_details()),
-                ),
+                team=TeamResponse.from_orm_team(team),
                 member=member,
             )
         )
@@ -728,15 +715,9 @@ async def get_teams(
     for team in teams:
         await update_team_members_statuses_for_event(session, team, active_event.id)
 
+    finalist_ids = await get_effective_finalist_ids(session, active_event.id)
     return [
-        TeamResponse(
-            id=team.id,
-            team_name=team.team_name,
-            team_motto=team.team_motto,
-            team_leader_id=team.team_leader_id,
-            logo_file_id=team.logo_file_id,
-            status_details=TeamStatusDetails(**team.get_status_details()),
-        )
+        TeamResponse.from_orm_team(team, is_finalist=team.id in finalist_ids)
         for team in teams
     ]
 
@@ -785,14 +766,8 @@ async def get_team(
     # Обновляем статусы пользователей на статусы для активного события
     await update_team_members_statuses_for_event(session, team, active_event.id)
 
-    return TeamResponse(
-        id=team.id,
-        team_name=team.team_name,
-        team_motto=team.team_motto,
-        team_leader_id=team.team_leader_id,
-        logo_file_id=team.logo_file_id,
-        status_details=TeamStatusDetails(**team.get_status_details()),
-        solution_link=team.solution_link,
+    return TeamResponse.from_orm_team(
+        team, is_finalist=await is_effective_finalist(session, team)
     )
 
 
@@ -845,14 +820,8 @@ async def get_my_team(
     # Обновляем статусы пользователей на статусы для активного события
     await update_team_members_statuses_for_event(session, team, active_event.id)
 
-    return TeamResponse(
-        id=team.id,
-        team_name=team.team_name,
-        team_motto=team.team_motto,
-        team_leader_id=team.team_leader_id,
-        logo_file_id=team.logo_file_id,
-        status_details=TeamStatusDetails(**team.get_status_details()),
-        solution_link=team.solution_link,
+    return TeamResponse.from_orm_team(
+        team, is_finalist=await is_effective_finalist(session, team)
     )
 
 
@@ -907,16 +876,9 @@ async def get_mentor_teams(
     for team in teams:
         await update_team_members_statuses_for_event(session, team, active_event.id)
 
+    finalist_ids = await get_effective_finalist_ids(session, active_event.id)
     return [
-        TeamResponse(
-            id=team.id,
-            team_name=team.team_name,
-            team_motto=team.team_motto,
-            team_leader_id=team.team_leader_id,
-            logo_file_id=team.logo_file_id,
-            status_details=TeamStatusDetails(**team.get_status_details()),
-            solution_link=team.solution_link,
-        )
+        TeamResponse.from_orm_team(team, is_finalist=team.id in finalist_ids)
         for team in teams
     ]
 
@@ -1010,17 +972,11 @@ async def get_admin_teams(
     for team in teams:
         await update_team_members_statuses_for_event(session, team, event_for_status)
 
+    finalist_ids = await get_effective_finalist_ids(session, event_for_status)
+
     return {
         "teams": [
-            TeamResponse(
-                id=team.id,
-                team_name=team.team_name,
-                team_motto=team.team_motto,
-                team_leader_id=team.team_leader_id,
-                logo_file_id=team.logo_file_id,
-                status_details=TeamStatusDetails(**team.get_status_details()),
-                solution_link=team.solution_link,
-            )
+            TeamResponse.from_orm_team(team, is_finalist=team.id in finalist_ids)
             for team in teams
         ],
         "total": total,
@@ -1263,14 +1219,8 @@ async def get_mentor_team(
     # Обновляем статусы пользователей на статусы для активного события
     await update_team_members_statuses_for_event(session, team, active_event.id)
 
-    return TeamResponse(
-        id=team.id,
-        team_name=team.team_name,
-        team_motto=team.team_motto,
-        team_leader_id=team.team_leader_id,
-        logo_file_id=team.logo_file_id,
-        status_details=TeamStatusDetails(**team.get_status_details()),
-        solution_link=team.solution_link,
+    return TeamResponse.from_orm_team(
+        team, is_finalist=await is_effective_finalist(session, team)
     )
 
 
@@ -1950,7 +1900,7 @@ async def upload_team_deployment(
     is_on_site = is_on_site_stage(current_stage)
 
     # Если очный этап, проверяем, что команда является финалистом
-    if is_on_site and not team.is_finalist:
+    if is_on_site and not await is_effective_finalist(session, team):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Только команды-финалисты могут загружать файлы на очном этапе",
@@ -2358,7 +2308,7 @@ async def update_solution_link(
     is_on_site = is_on_site_stage(current_stage)
 
     # Если очный этап, проверяем, что команда является финалистом
-    if is_on_site and not team.is_finalist:
+    if is_on_site and not await is_effective_finalist(session, team):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Только команды-финалисты могут загружать решения на очном этапе",
@@ -2390,13 +2340,19 @@ async def update_solution_link(
     # Нормализуем URL к стандартному формату
     normalized_link = normalize_github_url(solution_link)
 
-    team.solution_link = normalized_link
+    if is_on_site:
+        team.on_site_solution_link = normalized_link
+    else:
+        team.solution_link = normalized_link
     await session.commit()
     await session.refresh(team)
 
+    saved_link = team.on_site_solution_link if is_on_site else team.solution_link
+
     return {
         "message": "Ссылка на решение успешно обновлена",
-        "solution_link": team.solution_link,
+        "solution_link": saved_link,
+        "on_site_solution_link": team.on_site_solution_link,
         "security_note": "⚠️ Убедитесь, что репозиторий приватный и вы добавили организаторов/жюри в Settings → Collaborators с правами Read.",
     }
 
@@ -2706,20 +2662,26 @@ async def get_active_teams_count(session: AsyncSession = Depends(get_session)):
 async def get_public_finalists(session: AsyncSession = Depends(get_session)):
     """
     Публичное получение списка финалистов активного события без авторизации.
-    Возвращает топ-4 команды как финалистов и остальные команды как "оставшиеся".
+    На этапе определения финалистов — топ-4 и остальные с баллами заочного этапа.
+    На очном этапе — только 4 финалиста, без баллов и без остальных команд.
     """
-    from src.models.user import ParticipantInfo
-    from src.utils.finalists_utils import get_top_finalists_by_scores
+    from src.utils.evaluation_utils import filter_evaluations_by_stage_group
 
     active_event = await get_active_event(session)
 
-    # Получаем топ-4 финалистов на основе оценок заочного этапа
-    top_finalists = await get_top_finalists_by_scores(
-        session, active_event.id, stage_group="remote", count=4
+    current_stage_query = select(Stage).where(
+        Stage.is_active == True,  # noqa: E712
+        Stage.event_id == active_event.id,
     )
-    finalist_ids = {team.id for team in top_finalists}
+    current_stage = (await session.execute(current_stage_query)).scalar_one_or_none()
+    is_finalists_selection = bool(
+        current_stage and current_stage.type == StageType.FINALISTS_SELECTION.value
+    )
+    include_remaining = is_finalists_selection
+    include_scores = is_finalists_selection
 
-    # Получаем все команды события с участниками
+    finalist_ids = await get_effective_finalist_ids(session, active_event.id)
+
     query = (
         select(Team)
         .options(
@@ -2738,13 +2700,9 @@ async def get_public_finalists(session: AsyncSession = Depends(get_session)):
     result = await session.execute(query)
     all_teams = result.scalars().all()
 
-    # Получаем итоговые баллы для всех команд
-    from src.models.evaluation import TeamEvaluation
-    from sqlalchemy import func
-
-    # Получаем суммы баллов для всех команд события
-    scores_query = (
-        select(
+    team_scores = {}
+    if include_scores:
+        scores_query = select(
             TeamEvaluation.team_id,
             func.sum(
                 TeamEvaluation.criterion_1
@@ -2753,30 +2711,28 @@ async def get_public_finalists(session: AsyncSession = Depends(get_session)):
                 + TeamEvaluation.criterion_4
                 + TeamEvaluation.criterion_5
             ).label("total_score"),
+        ).where(TeamEvaluation.event_id == active_event.id)
+        scores_query = await filter_evaluations_by_stage_group(
+            session, scores_query, "remote", active_event.id
         )
-        .where(TeamEvaluation.event_id == active_event.id)
-        .group_by(TeamEvaluation.team_id)
-    )
-    scores_result = await session.execute(scores_query)
-    team_scores = {row.team_id: float(row.total_score) for row in scores_result.all()}
+        scores_query = scores_query.group_by(TeamEvaluation.team_id)
+        scores_result = await session.execute(scores_query)
+        team_scores = {row.team_id: float(row.total_score) for row in scores_result.all()}
 
     finalists = []
     remaining_teams = []
 
     for team in all_teams:
-        # Фильтруем только активные команды для оставшихся
         if team.id not in finalist_ids:
-            if not team.can_participate():
+            if not include_remaining or not team.can_participate():
                 continue
 
-        # Получаем активных участников
         active_members = [
             member
             for member in team.members
             if member.status.name == TeamMemberStatus.ACCEPTED.value
         ]
 
-        # Собираем информацию об участниках и вузах
         members_info = []
         vuz_list = set()
 
@@ -2784,7 +2740,6 @@ async def get_public_finalists(session: AsyncSession = Depends(get_session)):
             user = member.user
             member_data = {"full_name": user.full_name, "role": member.role.name}
 
-            # Добавляем информацию о вузе, если есть
             if user.participant_info:
                 vuz = user.participant_info.vuz
                 if vuz:
@@ -2793,9 +2748,6 @@ async def get_public_finalists(session: AsyncSession = Depends(get_session)):
 
             members_info.append(member_data)
 
-        # Получаем итоговый балл команды
-        total_score = team_scores.get(team.id, 0.0)
-
         team_data = {
             "team_id": str(team.id),
             "team_name": team.team_name,
@@ -2803,23 +2755,24 @@ async def get_public_finalists(session: AsyncSession = Depends(get_session)):
             "logo_file_id": str(team.logo_file_id) if team.logo_file_id else None,
             "members": members_info,
             "vuz_list": unique_vuz_list(vuz_list),
-            "total_score": total_score,
         }
+        if include_scores:
+            team_data["total_score"] = team_scores.get(team.id, 0.0)
 
-        # Разделяем на финалистов (топ-4) и остальные команды
         if team.id in finalist_ids:
             finalists.append(team_data)
-        else:
+        elif include_remaining:
             remaining_teams.append(team_data)
 
-    # Сортируем финалистов по баллам (убывание)
-    finalists.sort(key=lambda x: x.get("total_score", 0), reverse=True)
-    # Сортируем оставшиеся команды по баллам (убывание)
-    remaining_teams.sort(key=lambda x: x.get("total_score", 0), reverse=True)
+    if include_scores:
+        finalists.sort(key=lambda x: x.get("total_score", 0), reverse=True)
+        remaining_teams.sort(key=lambda x: x.get("total_score", 0), reverse=True)
+    else:
+        finalists.sort(key=lambda x: x.get("team_name", ""))
 
     return {
-        "finalists": finalists,  # Топ-4 команды
-        "remaining_teams": remaining_teams,  # Остальные активные команды
+        "finalists": finalists,
+        "remaining_teams": remaining_teams,
     }
 
 
@@ -2902,11 +2855,17 @@ async def get_judge_team_info(
 
         members_info.append(member_data)
 
+    from src.utils.evaluation_utils import get_current_stage_group
+    from src.utils.finalists_utils import get_solution_link_for_stage_group
+
+    current_group = await get_current_stage_group(session)
+
     return {
         "team_id": str(team.id),
         "team_name": team.team_name,
         "team_motto": team.team_motto or "",
-        "solution_link": team.solution_link,
+        "solution_link": get_solution_link_for_stage_group(team, current_group),
+        "on_site_solution_link": team.on_site_solution_link,
         "logo_file_id": str(team.logo_file_id) if team.logo_file_id else None,
         "members": members_info,
         "vuz_list": unique_vuz_list(vuz_list),

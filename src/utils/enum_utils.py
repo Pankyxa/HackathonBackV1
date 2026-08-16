@@ -54,19 +54,11 @@ class EnumData:
             self.user_status_ids[UserStatus(status.name)] = status.id
 
         stages = await session.execute(select(Stage))
-        stage_type_map = {
-            1: StageType.REGISTRATION,
-            2: StageType.REGISTRATION_CLOSED,
-            3: StageType.TASK_DISTRIBUTION,
-            4: StageType.SOLUTION_SUBMISSION,
-            5: StageType.SOLUTION_REVIEW,
-            6: StageType.ONLINE_DEFENSE,
-            7: StageType.RESULTS_PUBLICATION,
-            8: StageType.AWARD_CEREMONY
-        }
         for stage in stages.scalars():
-            if stage.order in stage_type_map:
-                self.stage_ids[stage_type_map[stage.order]] = stage.id
+            try:
+                self.stage_ids[StageType(stage.type)] = stage.id
+            except ValueError:
+                continue
 
     def get_user_role_id(self, role: UserRole) -> UUID:
         return self.user_role_ids[role]

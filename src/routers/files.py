@@ -13,44 +13,81 @@ from src.db import get_session
 from src.models import File as FileModel, User
 from src.auth.jwt import get_current_user
 from src.utils.router_states import user_router_state
+from src.utils.finalists_utils import user_can_access_on_site_materials
 
 router = APIRouter(prefix="/files", tags=["files"])
 
 # Путь к статическим файлам (исходные данные)
 STATIC_FILES_DIR = "files"
+ON_SITE_FILES_DIR = os.path.join(STATIC_FILES_DIR, "on_site")
+
+CONTENT_TYPES = {
+    '.pdf': 'application/pdf',
+    '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    '.doc': 'application/msword',
+    '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    '.xls': 'application/vnd.ms-excel',
+    '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    '.ppt': 'application/vnd.ms-powerpoint',
+    '.dwg': 'application/acad',
+    '.txt': 'text/plain',
+    '.md': 'text/markdown'
+}
 
 
-@router.get("/static/{filename:path}")
-async def get_static_file(filename: str):
-    """Получение статических файлов (исходные данные, задания)"""
-    # Декодируем URL-encoded имя файла
+def _safe_static_filename(filename: str) -> str:
     try:
         decoded_filename = unquote(filename)
     except Exception:
         decoded_filename = filename
-    
-    # Безопасность: проверяем, что путь не содержит переходов вверх
+
     if ".." in decoded_filename or "/" in decoded_filename or "\\" in decoded_filename:
         raise HTTPException(status_code=400, detail="Недопустимый путь к файлу")
-    
+
+    return decoded_filename
+
+
+@router.get("/static/{filename:path}")
+async def get_static_file(filename: str):
+    """Получение статических файлов (исходные данные, задания заочного этапа)"""
+    decoded_filename = _safe_static_filename(filename)
     full_path = os.path.join(STATIC_FILES_DIR, decoded_filename)
-    
+
     if not os.path.exists(full_path):
         raise HTTPException(status_code=404, detail="Файл не найден")
-    
-    # Определяем MIME тип по расширению
+
     file_ext = os.path.splitext(decoded_filename)[1].lower()
-    content_types = {
-        '.pdf': 'application/pdf',
-        '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-        '.doc': 'application/msword',
-        '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        '.xls': 'application/vnd.ms-excel',
-        '.txt': 'text/plain',
-        '.md': 'text/markdown'
-    }
-    media_type = content_types.get(file_ext, 'application/octet-stream')
-    
+    media_type = CONTENT_TYPES.get(file_ext, 'application/octet-stream')
+
+    return FileResponse(
+        path=full_path,
+        filename=decoded_filename,
+        media_type=media_type
+    )
+
+
+@router.get("/on-site/{filename:path}")
+async def get_on_site_file(
+    filename: str,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Файлы очного этапа: только финалисты, жюри, организаторы и администраторы."""
+    if not await user_can_access_on_site_materials(session, current_user):
+        raise HTTPException(
+            status_code=403,
+            detail="Материалы очного этапа доступны только командам-финалистам",
+        )
+
+    decoded_filename = _safe_static_filename(filename)
+    full_path = os.path.join(ON_SITE_FILES_DIR, decoded_filename)
+
+    if not os.path.exists(full_path):
+        raise HTTPException(status_code=404, detail="Файл не найден")
+
+    file_ext = os.path.splitext(decoded_filename)[1].lower()
+    media_type = CONTENT_TYPES.get(file_ext, 'application/octet-stream')
+
     return FileResponse(
         path=full_path,
         filename=decoded_filename,

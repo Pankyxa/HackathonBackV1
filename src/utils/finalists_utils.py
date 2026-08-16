@@ -1,20 +1,94 @@
 """
 Утилиты для работы с финалистами
 """
-from typing import List, Tuple
+from typing import List, Tuple, Optional, Set
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from sqlalchemy.orm import selectinload
 from uuid import UUID
 
 from src.models.team import Team, TeamMember
+from src.models.user import User, User2Roles
 from src.models.evaluation import TeamEvaluation
 from src.models.event import Event
 from src.utils.evaluation_utils import filter_evaluations_by_stage_group
 
 
+def get_solution_link_for_stage_group(team: Team, stage_group: Optional[str]) -> Optional[str]:
+    """Возвращает ссылку на решение для нужного этапа: очный — отдельная, иначе заочная."""
+    if stage_group == "on_site":
+        return team.on_site_solution_link
+    return team.solution_link
+
+
+async def user_can_access_on_site_materials(session: AsyncSession, user: User) -> bool:
+    """Админы, организаторы, жюри и участники команд-финалистов могут видеть материалы очного этапа."""
+    from src.utils.router_states import user_router_state, team_router_state
+    from src.utils.event_utils import get_active_event
+
+    await user_router_state.initialize(session)
+    await team_router_state.initialize(session)
+
+    user_roles_query = select(User2Roles).where(User2Roles.user_id == user.id)
+    user_roles = (await session.execute(user_roles_query)).scalars().all()
+
+    privileged_role_ids = {
+        user_router_state.admin_role_id,
+        user_router_state.organizer_role_id,
+        user_router_state.judge_role_id,
+    }
+    if any(role.role_id in privileged_role_ids for role in user_roles):
+        return True
+
+    try:
+        active_event = await get_active_event(session)
+    except Exception:
+        return False
+
+    finalist_ids = await get_effective_finalist_ids(session, active_event.id)
+    if not finalist_ids:
+        return False
+
+    membership_query = (
+        select(TeamMember.id)
+        .join(Team, TeamMember.team_id == Team.id)
+        .where(
+            TeamMember.user_id == user.id,
+            TeamMember.status_id == team_router_state.accepted_status_id,
+            Team.event_id == active_event.id,
+            Team.id.in_(finalist_ids),
+        )
+        .limit(1)
+    )
+    membership = (await session.execute(membership_query)).scalar_one_or_none()
+    return membership is not None
+
+
 # Количество финалистов (можно сделать настраиваемым)
 FINALISTS_COUNT = 4
+
+
+async def get_effective_finalist_ids(
+    session: AsyncSession,
+    event_id: UUID,
+    count: int = FINALISTS_COUNT,
+) -> Set[UUID]:
+    """Финалисты: отмеченные флагом is_finalist или топ-N по оценкам заочного этапа."""
+    flagged_query = select(Team.id).where(
+        Team.event_id == event_id,
+        Team.is_finalist == True,  # noqa: E712
+    )
+    flagged_ids = set((await session.execute(flagged_query)).scalars().all())
+    top_teams = await get_top_finalists_by_scores(
+        session, event_id, stage_group="remote", count=count
+    )
+    return flagged_ids.union(team.id for team in top_teams)
+
+
+async def is_effective_finalist(session: AsyncSession, team: Team) -> bool:
+    if getattr(team, "is_finalist", False):
+        return True
+    return team.id in await get_effective_finalist_ids(session, team.event_id)
 
 
 async def get_top_finalists_by_scores(

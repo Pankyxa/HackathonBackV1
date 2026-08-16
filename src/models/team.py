@@ -24,6 +24,7 @@ class Team(Base):
     team_leader_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     logo_file_id = Column(UUID(as_uuid=True), ForeignKey("files.id"), nullable=True)
     solution_link = Column(String(1024), nullable=True)
+    on_site_solution_link = Column(String(1024), nullable=True)
     event_id = Column(UUID(as_uuid=True), ForeignKey("events.id"), nullable=False)
     is_finalist = Column(
         Boolean, default=False, nullable=False

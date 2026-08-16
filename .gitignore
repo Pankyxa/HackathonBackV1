@@ -46,6 +46,9 @@ uploads/*
 # Static files (tasks, initial data)
 files/*
 !files/.gitkeep
+!files/on_site/
+files/on_site/*
+!files/on_site/.gitkeep
 
 # Backup files
 *.sql

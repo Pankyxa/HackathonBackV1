@@ -42,7 +42,22 @@ class TeamResponse(BaseModel):
     logo_file_id: UUID | None
     status_details: TeamStatusDetails
     solution_link: Optional[str] = None
+    on_site_solution_link: Optional[str] = None
     is_finalist: bool = False
+
+    @classmethod
+    def from_orm_team(cls, team, is_finalist: Optional[bool] = None) -> "TeamResponse":
+        return cls(
+            id=team.id,
+            team_name=team.team_name,
+            team_motto=team.team_motto,
+            team_leader_id=team.team_leader_id,
+            logo_file_id=team.logo_file_id,
+            status_details=TeamStatusDetails.model_validate(team.get_status_details()),
+            solution_link=team.solution_link,
+            on_site_solution_link=getattr(team, "on_site_solution_link", None),
+            is_finalist=bool(team.is_finalist) if is_finalist is None else is_finalist,
+        )
 
     @property
     def get_status_details(self) -> TeamStatusDetails:
