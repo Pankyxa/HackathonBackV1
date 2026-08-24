@@ -1796,10 +1796,12 @@ def build_finalists_kickoff_meeting_email_html(
 async def send_finalists_kickoff_meeting_notification(session: AsyncSession):
     """
     Отправляет уведомление об установочной встрече финалистам активного события
-    (принятые участники и наставник каждой команды с is_finalist=True).
+    (принятые участники и наставник каждой команды-финалиста).
+    Финалисты: флаг is_finalist или топ-4 по оценкам заочного этапа.
     Запускается вручную из админки.
     """
     from src.utils.event_utils import get_active_event
+    from src.utils.finalists_utils import get_effective_finalist_ids
 
     try:
         active_event = await get_active_event(session)
@@ -1809,11 +1811,16 @@ async def send_finalists_kickoff_meeting_notification(session: AsyncSession):
         )
         return
 
+    finalist_ids = await get_effective_finalist_ids(session, active_event.id)
+    if not finalist_ids:
+        logging.warning("Финалисты не найдены, рассылка установочной встречи пропущена")
+        return
+
     teams_query = (
         select(Team)
         .where(
             Team.event_id == active_event.id,
-            Team.is_finalist == True,  # noqa: E712
+            Team.id.in_(finalist_ids),
         )
         .options(
             selectinload(Team.members)
@@ -1893,6 +1900,206 @@ async def send_finalists_kickoff_meeting_notification(session: AsyncSession):
 
     logging.info(f"""
 Рассылка уведомлений об установочной встрече финалистам завершена!
+Время выполнения: {duration:.2f} секунд
+Всего команд-финалистов: {total_teams}
+Успешно отправлено: {successful_sends}
+Ошибок отправки: {failed_sends}
+    """)
+
+
+def build_finalists_stage2_consultation_email_html(
+    full_name: str, team_name: str | None = None
+) -> str:
+    team_name_block = ""
+    if team_name:
+        team_name_block = f"""
+                                                <tr>
+                                                    <td align="center" style="padding: 0 0 20px 0;">
+                                                        <p style="margin: 0;">Команда: {team_name}</p>
+                                                    </td>
+                                                </tr>
+        """
+
+    return f"""
+            <!DOCTYPE html>
+            <html>
+                <head>
+                    <meta charset="utf-8">
+                    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                </head>
+                <body style="margin: 0; padding: 0; background-color: #f5f5f5;">
+                    <table border="0" cellpadding="0" cellspacing="0" width="100%" style="font-family: Arial, sans-serif;">
+                        <tr>
+                            <td align="center" style="padding: 20px 0;">
+                                <table border="0" cellpadding="0" cellspacing="0" width="600" style="background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);">
+                                    <tr>
+                                        <td align="center" style="padding: 40px 30px;">
+                                            <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin-bottom: 30px;">
+                                                <tr>
+                                                    <td align="center">
+                                                        <h1 style="color: #2196F3; font-size: 24px; margin: 0;">Онлайн консультация участников 2 этапа Хакатона</h1>
+                                                    </td>
+                                                </tr>
+                                            </table>
+
+                                            <table border="0" cellpadding="0" cellspacing="0" width="100%">
+                                                <tr>
+                                                    <td align="center" style="padding: 0 0 20px 0;">
+                                                        <p style="margin: 0;">Здравствуйте, {full_name}!</p>
+                                                    </td>
+                                                </tr>
+                                                <tr>
+                                                    <td align="center" style="padding: 0 0 20px 0;">
+                                                        <p style="margin: 0;">Приглашаем вас на онлайн консультацию участников 2 этапа Хакатона, которая состоится <strong>25.08.2026 в 09:30 (МСК)</strong>.</p>
+                                                    </td>
+                                                </tr>
+                                                <tr>
+                                                    <td align="center" style="padding: 0 0 20px 0;">
+                                                        <p style="margin: 0;">Подключиться к консультации можно по ссылке ниже.</p>
+                                                    </td>
+                                                </tr>
+                                                <tr>
+                                                    <td align="center" style="padding: 20px 0;">
+                                                        <table border="0" cellpadding="0" cellspacing="0">
+                                                            <tr>
+                                                                <td align="center" bgcolor="#2196F3" style="border-radius: 4px;">
+                                                                    <a href="https://bigbb2.tyuiu.ru/b/zah-tka-oxi-n4i"
+                                                                       style="display: inline-block; padding: 12px 24px; color: #ffffff; text-decoration: none; font-weight: bold;">
+                                                                        Подключиться к консультации
+                                                                    </a>
+                                                                </td>
+                                                            </tr>
+                                                        </table>
+                                                    </td>
+                                                </tr>
+{team_name_block}
+                                            </table>
+
+                                            <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin-top: 30px;">
+                                                <tr>
+                                                    <td align="center" style="color: #666666; font-size: 14px;">
+                                                        <p style="margin: 0;">Это автоматическое уведомление, пожалуйста, не отвечайте на него.</p>
+                                                    </td>
+                                                </tr>
+                                            </table>
+                                        </td>
+                                    </tr>
+                                </table>
+                            </td>
+                        </tr>
+                    </table>
+                </body>
+            </html>
+    """
+
+
+async def send_finalists_stage2_consultation_notification(session: AsyncSession):
+    """
+    Отправляет уведомление об онлайн консультации 2 этапа финалистам активного события
+    (принятые участники и наставник каждой команды-финалиста).
+    Финалисты: флаг is_finalist или топ-4 по оценкам заочного этапа.
+    Запускается вручную из админки.
+    """
+    from src.utils.event_utils import get_active_event
+    from src.utils.finalists_utils import get_effective_finalist_ids
+
+    try:
+        active_event = await get_active_event(session)
+    except Exception:
+        logging.warning(
+            "Активное событие не найдено, пропускаем рассылку о консультации 2 этапа"
+        )
+        return
+
+    finalist_ids = await get_effective_finalist_ids(session, active_event.id)
+    if not finalist_ids:
+        logging.warning("Финалисты не найдены, рассылка консультации 2 этапа пропущена")
+        return
+
+    teams_query = (
+        select(Team)
+        .where(
+            Team.event_id == active_event.id,
+            Team.id.in_(finalist_ids),
+        )
+        .options(
+            selectinload(Team.members)
+            .selectinload(TeamMember.user)
+            .selectinload(User.current_status),
+            selectinload(Team.members).selectinload(TeamMember.role),
+            selectinload(Team.members).selectinload(TeamMember.status),
+        )
+    )
+    result = await session.execute(teams_query)
+    teams = result.scalars().all()
+
+    finalist_teams = [team for team in teams if team.get_status() == "active"]
+    total_teams = len(finalist_teams)
+    successful_sends = 0
+    failed_sends = 0
+    processed_user_ids = set()
+
+    logging.info(
+        f"Начало рассылки уведомлений о консультации 2 этапа финалистам. Всего команд: {total_teams}"
+    )
+    start_time = datetime.now()
+
+    for i, team in enumerate(finalist_teams, 1):
+        logging.info(f"Обработка команды-финалиста {i}/{total_teams}: {team.team_name}")
+
+        team_members = [
+            member.user
+            for member in team.members
+            if member.status_id == team_router_state.accepted_status_id
+            and member.role_id
+            in [
+                team_router_state.teamlead_role_id,
+                team_router_state.member_role_id,
+                team_router_state.mentor_role_id,
+            ]
+            and member.user
+            and member.user.email
+        ]
+
+        for member in team_members:
+            if member.id in processed_user_ids:
+                continue
+            processed_user_ids.add(member.id)
+
+            html_content = build_finalists_stage2_consultation_email_html(
+                member.full_name, team.team_name
+            )
+
+            try:
+                success = await send_email_async(
+                    to_email=member.email,
+                    subject="Онлайн консультация участников 2 этапа Хакатона - 25.08.2026 в 09:30 (МСК)",
+                    body=html_content,
+                    is_html=True,
+                )
+                if success:
+                    successful_sends += 1
+                    logging.info(
+                        f"[Команда {i}/{total_teams}] Отправлено уведомление участнику {member.full_name} ({member.email})"
+                    )
+                else:
+                    failed_sends += 1
+                    logging.error(
+                        f"[Команда {i}/{total_teams}] Ошибка отправки участнику {member.full_name} ({member.email})"
+                    )
+            except Exception as e:
+                failed_sends += 1
+                logging.error(
+                    f"[Команда {i}/{total_teams}] Исключение при отправке участнику {member.full_name} ({member.email}): {str(e)}"
+                )
+
+            await asyncio.sleep(0.1)
+
+    end_time = datetime.now()
+    duration = (end_time - start_time).total_seconds()
+
+    logging.info(f"""
+Рассылка уведомлений о консультации 2 этапа финалистам завершена!
 Время выполнения: {duration:.2f} секунд
 Всего команд-финалистов: {total_teams}
 Успешно отправлено: {successful_sends}
