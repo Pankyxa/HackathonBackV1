@@ -393,13 +393,9 @@ async def get_judge_evaluations(
     # Если очный этап, получаем список финалистов для фильтрации
     finalist_ids = None
     if target_stage_group == "on_site":
-        from src.utils.finalists_utils import get_top_finalists_by_scores
+        from src.utils.finalists_utils import get_effective_finalist_ids
 
-        # Получаем топ-4 финалистов на основе оценок заочного этапа
-        finalist_teams = await get_top_finalists_by_scores(
-            session, active_event.id, stage_group="remote", count=4
-        )
-        finalist_ids = [team.id for team in finalist_teams]
+        finalist_ids = await get_effective_finalist_ids(session, active_event.id)
 
     # Базовый запрос
     base_query = (
@@ -498,13 +494,9 @@ async def get_unevaluated_teams(
 
     # Если очный этап, показываем только финалистов
     if target_stage_group == "on_site":
-        from src.utils.finalists_utils import get_top_finalists_by_scores
+        from src.utils.finalists_utils import get_effective_finalist_ids
 
-        # Получаем топ-4 финалистов на основе оценок заочного этапа
-        finalist_teams = await get_top_finalists_by_scores(
-            session, active_event.id, stage_group="remote", count=4
-        )
-        finalist_ids = [team.id for team in finalist_teams]
+        finalist_ids = await get_effective_finalist_ids(session, active_event.id)
 
         # Получаем этапы очной группы для фильтрации оценок
         from src.utils.evaluation_utils import get_stages_by_group
@@ -697,14 +689,9 @@ async def get_detailed_evaluations(
 
     # Если очный этап, показываем только финалистов
     if target_stage_group == "on_site":
-        from src.utils.finalists_utils import get_top_finalists_by_scores
+        from src.utils.finalists_utils import get_effective_finalist_ids
 
-        # Получаем топ-4 финалистов на основе оценок заочного этапа
-        finalist_teams = await get_top_finalists_by_scores(
-            session, active_event.id, stage_group="remote", count=4
-        )
-        # Фильтруем только финалистов
-        finalist_ids = [team.id for team in finalist_teams]
+        finalist_ids = await get_effective_finalist_ids(session, active_event.id)
         teams_query = (
             select(Team)
             .options(

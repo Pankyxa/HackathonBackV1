@@ -64,8 +64,23 @@ async def user_can_access_on_site_materials(session: AsyncSession, user: User) -
     return membership is not None
 
 
-# Количество финалистов (можно сделать настраиваемым)
+# Количество финалистов по оценкам заочного этапа
 FINALISTS_COUNT = 4
+
+# Дополнительные финалисты текущего события (по имени команды)
+HARDCODED_FINALIST_TEAM_NAMES = frozenset({"Энергия Сибири"})
+
+
+async def _get_hardcoded_finalist_ids(
+    session: AsyncSession, event_id: UUID
+) -> Set[UUID]:
+    if not HARDCODED_FINALIST_TEAM_NAMES:
+        return set()
+    query = select(Team.id).where(
+        Team.event_id == event_id,
+        Team.team_name.in_(HARDCODED_FINALIST_TEAM_NAMES),
+    )
+    return set((await session.execute(query)).scalars().all())
 
 
 async def get_effective_finalist_ids(
@@ -73,7 +88,7 @@ async def get_effective_finalist_ids(
     event_id: UUID,
     count: int = FINALISTS_COUNT,
 ) -> Set[UUID]:
-    """Финалисты: отмеченные флагом is_finalist или топ-N по оценкам заочного этапа."""
+    """Финалисты: флаг is_finalist, топ-N по оценкам заочного этапа или хардкод для события."""
     flagged_query = select(Team.id).where(
         Team.event_id == event_id,
         Team.is_finalist == True,  # noqa: E712
@@ -82,11 +97,14 @@ async def get_effective_finalist_ids(
     top_teams = await get_top_finalists_by_scores(
         session, event_id, stage_group="remote", count=count
     )
-    return flagged_ids.union(team.id for team in top_teams)
+    hardcoded_ids = await _get_hardcoded_finalist_ids(session, event_id)
+    return flagged_ids.union(team.id for team in top_teams).union(hardcoded_ids)
 
 
 async def is_effective_finalist(session: AsyncSession, team: Team) -> bool:
     if getattr(team, "is_finalist", False):
+        return True
+    if getattr(team, "team_name", None) in HARDCODED_FINALIST_TEAM_NAMES:
         return True
     return team.id in await get_effective_finalist_ids(session, team.event_id)
 

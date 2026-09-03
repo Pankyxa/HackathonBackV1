@@ -1797,7 +1797,7 @@ async def send_finalists_kickoff_meeting_notification(session: AsyncSession):
     """
     Отправляет уведомление об установочной встрече финалистам активного события
     (принятые участники и наставник каждой команды-финалиста).
-    Финалисты: флаг is_finalist или топ-4 по оценкам заочного этапа.
+    Финалисты: флаг is_finalist, топ-4 по оценкам заочного этапа или хардкод для события.
     Запускается вручную из админки.
     """
     from src.utils.event_utils import get_active_event
@@ -1997,7 +1997,7 @@ async def send_finalists_stage2_consultation_notification(session: AsyncSession)
     """
     Отправляет уведомление об онлайн консультации 2 этапа финалистам активного события
     (принятые участники и наставник каждой команды-финалиста).
-    Финалисты: флаг is_finalist или топ-4 по оценкам заочного этапа.
+    Финалисты: флаг is_finalist, топ-4 по оценкам заочного этапа или хардкод для события.
     Запускается вручную из админки.
     """
     from src.utils.event_utils import get_active_event

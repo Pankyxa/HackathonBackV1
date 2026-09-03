@@ -2696,8 +2696,8 @@ async def get_active_teams_count(session: AsyncSession = Depends(get_session)):
 async def get_public_finalists(session: AsyncSession = Depends(get_session)):
     """
     Публичное получение списка финалистов активного события без авторизации.
-    На этапе определения финалистов — топ-4 и остальные с баллами заочного этапа.
-    На очном этапе — только 4 финалиста, без баллов и без остальных команд.
+    На этапе определения финалистов — финалисты и остальные с баллами заочного этапа.
+    На очном этапе — только финалисты, без баллов и без остальных команд.
     """
     from src.utils.evaluation_utils import filter_evaluations_by_stage_group
 
