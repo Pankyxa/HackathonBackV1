@@ -49,6 +49,7 @@ from src.schemas.team import (
     TeamResponse,
     TeamMemberResponse,
     TeamMemberCreate,
+    TeamLeaderChange,
     TeamInvitationResponse,
     TeamMembersResponse,
     TeamMemberDetailResponse,
@@ -120,6 +121,162 @@ async def require_admin(current_user: User, session: AsyncSession) -> None:
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Доступ разрешен только для администраторов",
         )
+
+
+async def _load_team_for_response(session: AsyncSession, team_id: uuid.UUID) -> Team:
+    team_query = (
+        select(Team)
+        .options(
+            selectinload(Team.members)
+            .selectinload(TeamMember.user)
+            .selectinload(User.current_status),
+            selectinload(Team.members).selectinload(TeamMember.role),
+            selectinload(Team.members).selectinload(TeamMember.status),
+        )
+        .where(Team.id == team_id)
+    )
+    return (await session.execute(team_query)).scalar_one()
+
+
+async def change_team_leader(
+    session: AsyncSession,
+    team: Team,
+    new_leader_id: uuid.UUID,
+    *,
+    allow_add: bool,
+    active_event,
+) -> Team:
+    if team.team_leader_id == new_leader_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Этот пользователь уже является капитаном команды",
+        )
+
+    current_leader_member = (
+        await session.execute(
+            select(TeamMember).where(
+                TeamMember.team_id == team.id,
+                TeamMember.role_id == team_router_state.teamlead_role_id,
+                TeamMember.status_id == team_router_state.accepted_status_id,
+            )
+        )
+    ).scalar_one_or_none()
+
+    user = (
+        await session.execute(
+            select(User)
+            .options(selectinload(User.user2roles).selectinload(User2Roles.role))
+            .where(User.id == new_leader_id)
+        )
+    ).scalar_one_or_none()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Пользователь не найден"
+        )
+
+    existing_in_team = (
+        await session.execute(
+            select(TeamMember).where(
+                TeamMember.team_id == team.id,
+                TeamMember.user_id == new_leader_id,
+            )
+        )
+    ).scalar_one_or_none()
+
+    if (
+        existing_in_team
+        and existing_in_team.status_id == team_router_state.accepted_status_id
+    ):
+        if existing_in_team.role_id == team_router_state.mentor_role_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Наставник не может быть капитаном команды",
+            )
+
+        if current_leader_member:
+            current_leader_member.role_id = team_router_state.member_role_id
+        existing_in_team.role_id = team_router_state.teamlead_role_id
+        existing_in_team.status_id = team_router_state.accepted_status_id
+        team.team_leader_id = new_leader_id
+    else:
+        if not allow_add:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Капитаном можно назначить только участника этой команды",
+            )
+
+        is_participant = any(
+            user2role.role_id == user_router_state.participant_role_id
+            for user2role in user.user2roles
+        )
+        if not is_participant:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Пользователь не является участником",
+            )
+
+        existing_in_event = (
+            await session.execute(
+                select(TeamMember)
+                .join(Team, TeamMember.team_id == Team.id)
+                .where(
+                    TeamMember.user_id == new_leader_id,
+                    TeamMember.status_id == team_router_state.accepted_status_id,
+                    TeamMember.role_id != team_router_state.mentor_role_id,
+                    Team.event_id == active_event.id,
+                    Team.id != team.id,
+                )
+            )
+        ).scalar_one_or_none()
+        if existing_in_event:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Пользователь уже состоит в другой команде активного события",
+            )
+
+        accepted_non_mentor_count = (
+            await session.execute(
+                select(func.count())
+                .select_from(TeamMember)
+                .where(
+                    TeamMember.team_id == team.id,
+                    TeamMember.status_id == team_router_state.accepted_status_id,
+                    TeamMember.role_id != team_router_state.mentor_role_id,
+                )
+            )
+        ).scalar_one()
+        if not existing_in_team or existing_in_team.status_id != team_router_state.accepted_status_id:
+            max_non_mentor = 1 + team.get_required_regular_members_count()
+            if accepted_non_mentor_count >= max_non_mentor:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="В команде уже максимальное число участников. Сначала удалите участника или выберите капитана из состава команды",
+                )
+
+        if existing_in_team:
+            existing_in_team.role_id = team_router_state.teamlead_role_id
+            existing_in_team.status_id = team_router_state.accepted_status_id
+        else:
+            session.add(
+                TeamMember(
+                    id=uuid.uuid4(),
+                    team_id=team.id,
+                    user_id=new_leader_id,
+                    role_id=team_router_state.teamlead_role_id,
+                    status_id=team_router_state.accepted_status_id,
+                )
+            )
+
+        if current_leader_member:
+            current_leader_member.role_id = team_router_state.member_role_id
+
+        team.team_leader_id = new_leader_id
+
+    await session.flush()
+    reloaded = await _load_team_for_response(session, team.id)
+    await update_team_members_statuses_for_event(session, reloaded, active_event.id)
+    await session.commit()
+    return await _load_team_for_response(session, team.id)
 
 
 @router.post("/create", response_model=TeamResponse)
@@ -1332,6 +1489,38 @@ async def admin_remove_team_member(
     return {"message": "Участник успешно удален из команды"}
 
 
+@router.put("/admin/{team_id}/leader", response_model=TeamResponse)
+async def admin_change_team_leader(
+    team_id: uuid.UUID,
+    leader_data: TeamLeaderChange,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Сменить капитана команды без ограничения по этапу."""
+    await require_admin(current_user, session)
+    active_event = await get_active_event(session)
+
+    team = (
+        await session.execute(
+            select(Team).where(Team.id == team_id, Team.event_id == active_event.id)
+        )
+    ).scalar_one_or_none()
+    if not team:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Команда не найдена или не принадлежит активному событию",
+        )
+
+    updated_team = await change_team_leader(
+        session,
+        team,
+        leader_data.user_id,
+        allow_add=True,
+        active_event=active_event,
+    )
+    return TeamResponse.from_orm_team(updated_team)
+
+
 @router.get("/mentor/teams/{team_id}", response_model=TeamResponse)
 async def get_mentor_team(
     team_id: UUID,
@@ -1588,6 +1777,44 @@ async def remove_team_member(
     await session.commit()
 
     return {"message": "Участник успешно удален из команды"}
+
+
+@router.put("/{team_id}/leader", response_model=TeamResponse)
+async def change_own_team_leader(
+    team_id: uuid.UUID,
+    leader_data: TeamLeaderChange,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Передать капитанство другому участнику команды."""
+    await check_stage(session, StageType.REGISTRATION)
+    active_event = await get_active_event(session)
+
+    team = (
+        await session.execute(
+            select(Team).where(Team.id == team_id, Team.event_id == active_event.id)
+        )
+    ).scalar_one_or_none()
+    if not team:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Команда не найдена или не принадлежит активному событию",
+        )
+
+    if team.team_leader_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Только капитан команды может передать свои права",
+        )
+
+    updated_team = await change_team_leader(
+        session,
+        team,
+        leader_data.user_id,
+        allow_add=False,
+        active_event=active_event,
+    )
+    return TeamResponse.from_orm_team(updated_team)
 
 
 @router.put("/{team_id}/logo")

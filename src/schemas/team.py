@@ -102,6 +102,10 @@ class TeamMemberCreate(BaseModel):
     role: TeamRole
 
 
+class TeamLeaderChange(BaseModel):
+    user_id: UUID
+
+
 class TeamMemberResponse(BaseModel):
     id: UUID
     team_id: UUID
