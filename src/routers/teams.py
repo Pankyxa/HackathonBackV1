@@ -109,6 +109,19 @@ def get_status_id(status: TeamMemberStatus) -> UUID:
     return team_router_state.rejected_status_id
 
 
+async def require_admin(current_user: User, session: AsyncSession) -> None:
+    user_roles_query = select(User2Roles).where(User2Roles.user_id == current_user.id)
+    user_roles = (await session.execute(user_roles_query)).scalars().all()
+    is_admin = any(
+        role.role_id == user_router_state.admin_role_id for role in user_roles
+    )
+    if not is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Доступ разрешен только для администраторов",
+        )
+
+
 @router.post("/create", response_model=TeamResponse)
 async def create_team(
     team_name: str = Form(...),
@@ -1137,6 +1150,186 @@ async def export_active_teams(
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="{file_name}"'},
     )
+
+
+@router.post("/admin/{team_id}/members", response_model=TeamMemberResponse)
+async def admin_add_team_member(
+    team_id: uuid.UUID,
+    member_data: TeamMemberCreate,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Добавить участника в команду без смены этапа. Участник сразу принимается."""
+    await require_admin(current_user, session)
+    active_event = await get_active_event(session)
+
+    team_query = (
+        select(Team)
+        .options(
+            selectinload(Team.members).selectinload(TeamMember.role),
+            selectinload(Team.members).selectinload(TeamMember.status),
+        )
+        .where(Team.id == team_id, Team.event_id == active_event.id)
+    )
+    team = (await session.execute(team_query)).scalar_one_or_none()
+    if not team:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Команда не найдена или не принадлежит активному событию",
+        )
+
+    if member_data.role == TeamRole.TEAMLEAD:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Нельзя назначить нового лидера через эту операцию",
+        )
+
+    user_query = (
+        select(User)
+        .options(selectinload(User.user2roles).selectinload(User2Roles.role))
+        .where(User.id == member_data.user_id)
+    )
+    user = (await session.execute(user_query)).scalar_one_or_none()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Пользователь не найден"
+        )
+
+    if member_data.role == TeamRole.MENTOR:
+        is_mentor = any(
+            user2role.role_id == user_router_state.mentor_role_id
+            for user2role in user.user2roles
+        )
+        if not is_mentor:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Пользователь не является ментором",
+            )
+    else:
+        is_participant = any(
+            user2role.role_id == user_router_state.participant_role_id
+            for user2role in user.user2roles
+        )
+        if not is_participant:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Пользователь не является участником",
+            )
+
+        existing_in_event = (
+            select(TeamMember)
+            .join(Team, TeamMember.team_id == Team.id)
+            .where(
+                TeamMember.user_id == member_data.user_id,
+                TeamMember.status_id == team_router_state.accepted_status_id,
+                TeamMember.role_id != team_router_state.mentor_role_id,
+                Team.event_id == active_event.id,
+            )
+        )
+        if (await session.execute(existing_in_event)).scalar_one_or_none():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Пользователь уже состоит в другой команде активного события",
+            )
+
+        accepted_non_mentor_count = (
+            await session.execute(
+                select(func.count())
+                .select_from(TeamMember)
+                .where(
+                    TeamMember.team_id == team_id,
+                    TeamMember.status_id == team_router_state.accepted_status_id,
+                    TeamMember.role_id != team_router_state.mentor_role_id,
+                )
+            )
+        ).scalar_one()
+        max_non_mentor = 1 + team.get_required_regular_members_count()
+        if accepted_non_mentor_count >= max_non_mentor:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"В команде уже максимальное число участников ({max_non_mentor})",
+            )
+
+    existing_member_query = select(TeamMember).where(
+        TeamMember.team_id == team_id, TeamMember.user_id == member_data.user_id
+    )
+    existing_member = (await session.execute(existing_member_query)).scalar_one_or_none()
+
+    if existing_member:
+        if existing_member.status_id == team_router_state.accepted_status_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Пользователь уже является участником команды",
+            )
+        existing_member.role_id = get_role_id(member_data.role)
+        existing_member.status_id = team_router_state.accepted_status_id
+        team_member = existing_member
+    else:
+        team_member = TeamMember(
+            id=uuid.uuid4(),
+            team_id=team_id,
+            user_id=member_data.user_id,
+            role_id=get_role_id(member_data.role),
+            status_id=team_router_state.accepted_status_id,
+        )
+        session.add(team_member)
+
+    await session.commit()
+
+    member_result = await session.execute(
+        select(TeamMember)
+        .options(selectinload(TeamMember.role), selectinload(TeamMember.status))
+        .where(TeamMember.id == team_member.id)
+    )
+    return member_result.scalar_one()
+
+
+@router.delete("/admin/{team_id}/members/{member_id}")
+async def admin_remove_team_member(
+    team_id: uuid.UUID,
+    member_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Удалить участника из команды без смены этапа."""
+    await require_admin(current_user, session)
+    active_event = await get_active_event(session)
+
+    team = (
+        await session.execute(
+            select(Team).where(Team.id == team_id, Team.event_id == active_event.id)
+        )
+    ).scalar_one_or_none()
+    if not team:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Команда не найдена или не принадлежит активному событию",
+        )
+
+    team_member = (
+        await session.execute(
+            select(TeamMember).where(
+                TeamMember.team_id == team_id,
+                TeamMember.id == member_id,
+                TeamMember.status_id == team_router_state.accepted_status_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if not team_member:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Участник не найден в команде"
+        )
+
+    if team_member.role_id == team_router_state.teamlead_role_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Невозможно удалить лидера команды",
+        )
+
+    await session.delete(team_member)
+    await session.commit()
+
+    return {"message": "Участник успешно удален из команды"}
 
 
 @router.get("/mentor/teams/{team_id}", response_model=TeamResponse)

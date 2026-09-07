@@ -1,7 +1,7 @@
 import datetime
 from typing import Optional, List
 from uuid import UUID
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 
 from src.models import UserStatus
 from src.schemas.enum_tables import RoleResponse
@@ -17,6 +17,16 @@ class UserBase(BaseModel):
 class UserCreate(UserBase):
     password: str
     full_name: Optional[str] = None
+    number: str
+    vuz: str
+    vuz_direction: str
+    code_speciality: str
+    course: str
+
+
+class AdminParticipantCreate(UserBase):
+    password: str = Field(min_length=6, max_length=72)
+    full_name: str
     number: str
     vuz: str
     vuz_direction: str

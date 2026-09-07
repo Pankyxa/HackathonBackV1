@@ -9,17 +9,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_, and_, not_, exists, func, delete
 from sqlalchemy.orm import selectinload
 from typing import List, Optional
+from pydantic import ValidationError
 
 from starlette import status
 
 from src.auth.jwt import get_current_user
+from src.auth.utils import get_password_hash
 from src.db import get_session
-from src.models import User, TeamMember, File as FileModel, UserStatus, Team, Stage
+from src.models import User, TeamMember, File as FileModel, UserStatus, Team, Stage, ParticipantInfo, FileType, FileOwnerType
 from src.models.enums import StageType
 from src.models.user import User2Roles, UserStatusHistory, UserStatusType, UserEventStatus
 from src.schemas.file import FileResponse
 from src.schemas.user import UserResponse, PaginatedUserResponse, ChangeUserStatusRequest, UpdateUserRolesRequest, \
-    UpdateUserDocumentsRequest
+    UpdateUserDocumentsRequest, AdminParticipantCreate
+from src.utils.file_utils import save_file
 from src.utils.background_tasks import (
     send_status_change_email,
     send_team_confirmation_email_background,
@@ -31,6 +34,73 @@ from src.utils.event_utils import get_active_event
 from src.utils.user_status_utils import filter_users_by_status_for_event, get_user_status_for_event, get_user_status_id_for_event
 
 router = APIRouter(prefix="/users", tags=["users"])
+
+
+MAX_ADMIN_DOCUMENT_SIZE = 5 * 1024 * 1024
+
+
+def _ensure_pdf_document(upload_file: UploadFile) -> None:
+    filename = (upload_file.filename or "").lower()
+    if not filename.endswith(".pdf"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Допустимый формат документа: PDF",
+        )
+
+
+async def _replace_user_document(
+        session: AsyncSession,
+        user_id: uuid.UUID,
+        upload_file: UploadFile,
+        file_type: FileType,
+) -> FileModel:
+    _ensure_pdf_document(upload_file)
+    file_type_id = (
+        file_router_state.consent_type_id
+        if file_type == FileType.CONSENT
+        else file_router_state.education_certificate_type_id
+    )
+    old_files_query = select(FileModel).where(
+        and_(
+            FileModel.user_id == user_id,
+            FileModel.owner_type_id == file_router_state.user_owner_type_id,
+            FileModel.file_type_id == file_type_id,
+        )
+    )
+    old_files = (await session.execute(old_files_query)).scalars().all()
+    for old_file in old_files:
+        if os.path.exists(old_file.file_path):
+            os.remove(old_file.file_path)
+        await session.delete(old_file)
+    await session.flush()
+
+    file_model = await save_file(
+        upload_file,
+        user_id,
+        file_type,
+        FileOwnerType.USER,
+        max_file_size=MAX_ADMIN_DOCUMENT_SIZE,
+    )
+    session.add(file_model)
+    return file_model
+
+
+async def _require_admin(current_user: User, session: AsyncSession) -> None:
+    result = await session.execute(
+        select(User)
+        .options(selectinload(User.user2roles))
+        .where(User.id == current_user.id)
+    )
+    user = result.scalar_one()
+    is_admin = any(
+        role.role_id == user_router_state.admin_role_id
+        for role in user.user2roles
+    )
+    if not is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Только администраторы могут выполнять эту операцию",
+        )
 
 
 @router.get("/search", response_model=List[UserResponse])
@@ -396,6 +466,155 @@ async def get_pending_users(
         "users": users,
         "total": total
     }
+
+
+@router.post("/admin/register", response_model=UserResponse)
+async def admin_register_participant(
+        email: str = Form(...),
+        password: str = Form(...),
+        full_name: str = Form(...),
+        number: str = Form(...),
+        vuz: str = Form(...),
+        vuz_direction: str = Form(...),
+        code_speciality: str = Form(...),
+        course: str = Form(...),
+        consent_file: UploadFile = File(...),
+        education_certificate_file: UploadFile = File(...),
+        current_user: User = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session)
+):
+    """
+    Регистрация участника администратором без смены текущего этапа.
+    Участник сразу подтверждён и может войти в систему.
+    """
+    await _require_admin(current_user, session)
+    active_event = await get_active_event(session)
+    try:
+        participant_data = AdminParticipantCreate(
+            email=email,
+            password=password,
+            full_name=full_name,
+            number=number,
+            vuz=vuz,
+            vuz_direction=vuz_direction,
+            code_speciality=code_speciality,
+            course=course,
+        )
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=exc.errors(),
+        )
+
+    email = participant_data.email.lower()
+    existing_user_result = await session.execute(select(User).where(User.email == email))
+    if existing_user_result.scalar_one_or_none():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email уже зарегистрирован. Добавьте существующего участника в команду через карточку команды."
+        )
+
+    user = User(
+        id=uuid.uuid4(),
+        email=email,
+        password=get_password_hash(participant_data.password),
+        full_name=participant_data.full_name,
+        current_status_id=user_router_state.approved_status_id,
+        email_verified=True,
+    )
+    session.add(user)
+    await session.flush()
+
+    session.add(UserStatusHistory(
+        id=uuid.uuid4(),
+        user_id=user.id,
+        status_id=user_router_state.approved_status_id,
+        comment="Зарегистрирован администратором без смены этапа",
+    ))
+    session.add(ParticipantInfo(
+        id=uuid.uuid4(),
+        user_id=user.id,
+        number=participant_data.number,
+        vuz=participant_data.vuz,
+        vuz_direction=participant_data.vuz_direction,
+        code_speciality=participant_data.code_speciality,
+        course=participant_data.course,
+    ))
+    session.add(User2Roles(
+        id=uuid.uuid4(),
+        user_id=user.id,
+        role_id=user_router_state.participant_role_id,
+    ))
+    session.add(UserEventStatus(
+        id=uuid.uuid4(),
+        user_id=user.id,
+        event_id=active_event.id,
+        status_id=user_router_state.approved_status_id,
+    ))
+
+    await _replace_user_document(session, user.id, consent_file, FileType.CONSENT)
+    await _replace_user_document(session, user.id, education_certificate_file, FileType.EDUCATION_CERTIFICATE)
+
+    await session.commit()
+
+    user_query = (
+        select(User)
+        .options(
+            selectinload(User.participant_info),
+            selectinload(User.mentor_info),
+            selectinload(User.user2roles).selectinload(User2Roles.role),
+            selectinload(User.current_status),
+            selectinload(User.status_history).selectinload(UserStatusHistory.status),
+        )
+        .where(User.id == user.id)
+    )
+    result = await session.execute(user_query)
+    created_user = result.scalar_one()
+    created_user.mentor_info = None
+    return created_user
+
+
+@router.put("/admin/{user_id}/documents", response_model=UserResponse)
+async def admin_upload_user_document(
+        user_id: uuid.UUID,
+        document_type: str = Form(...),
+        file: UploadFile = File(...),
+        current_user: User = Depends(get_current_user),
+        session: AsyncSession = Depends(get_session)
+):
+    """Прикрепить или заменить документ участника без смены этапа."""
+    await _require_admin(current_user, session)
+
+    if document_type not in ["consent", "certificate"]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Неверный тип документа. Допустимые значения: consent, certificate",
+        )
+
+    user = (await session.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Пользователь не найден",
+        )
+
+    file_type = FileType.CONSENT if document_type == "consent" else FileType.EDUCATION_CERTIFICATE
+    await _replace_user_document(session, user_id, file, file_type)
+    await session.commit()
+
+    user_query = (
+        select(User)
+        .options(
+            selectinload(User.participant_info),
+            selectinload(User.mentor_info),
+            selectinload(User.user2roles).selectinload(User2Roles.role),
+            selectinload(User.current_status),
+            selectinload(User.status_history).selectinload(UserStatusHistory.status),
+        )
+        .where(User.id == user_id)
+    )
+    result = await session.execute(user_query)
+    return result.scalar_one()
 
 
 @router.get("/{user_id}/documents", response_model=List[FileResponse])
